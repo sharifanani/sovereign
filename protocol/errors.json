@@ -1,0 +1,193 @@
+{
+  "errors": {
+    "1001": {
+      "name": "InvalidCredential",
+      "category": "authentication",
+      "description": "The provided WebAuthn credential is invalid or does not match any registered credential.",
+      "fatal": false,
+      "http_equivalent": 401
+    },
+    "1002": {
+      "name": "ExpiredSession",
+      "category": "authentication",
+      "description": "The session token has expired. The client must re-authenticate with a full WebAuthn ceremony.",
+      "fatal": true,
+      "http_equivalent": 401
+    },
+    "1003": {
+      "name": "RegistrationFailed",
+      "category": "authentication",
+      "description": "User registration failed. The username may already be taken, or attestation verification failed.",
+      "fatal": false,
+      "http_equivalent": 409
+    },
+    "1004": {
+      "name": "ChallengeFailed",
+      "category": "authentication",
+      "description": "The WebAuthn challenge-response verification failed. The signature is invalid or the challenge has expired.",
+      "fatal": false,
+      "http_equivalent": 401
+    },
+    "1005": {
+      "name": "SessionRevoked",
+      "category": "authentication",
+      "description": "The session was explicitly revoked by an administrator.",
+      "fatal": true,
+      "http_equivalent": 401
+    },
+    "2001": {
+      "name": "NotGroupAdmin",
+      "category": "authorization",
+      "description": "The operation requires group admin privileges, but the user is a regular member.",
+      "fatal": false,
+      "http_equivalent": 403
+    },
+    "2002": {
+      "name": "NotGroupMember",
+      "category": "authorization",
+      "description": "The user is not a member of the specified group conversation.",
+      "fatal": false,
+      "http_equivalent": 403
+    },
+    "2003": {
+      "name": "NotAdmin",
+      "category": "authorization",
+      "description": "The operation requires server admin privileges.",
+      "fatal": false,
+      "http_equivalent": 403
+    },
+    "2004": {
+      "name": "AccountDisabled",
+      "category": "authorization",
+      "description": "The user's account has been disabled by an administrator.",
+      "fatal": true,
+      "http_equivalent": 403
+    },
+    "3001": {
+      "name": "MalformedMessage",
+      "category": "protocol",
+      "description": "The message payload could not be deserialized as the expected Protocol Buffer message.",
+      "fatal": false,
+      "http_equivalent": 400
+    },
+    "3002": {
+      "name": "UnknownMessageType",
+      "category": "protocol",
+      "description": "The MessageType enum value in the Envelope is not recognized by the server.",
+      "fatal": false,
+      "http_equivalent": 400
+    },
+    "3003": {
+      "name": "MessageTooLarge",
+      "category": "protocol",
+      "description": "The serialized Envelope exceeds the maximum allowed size (default: 64KB).",
+      "fatal": false,
+      "http_equivalent": 413
+    },
+    "3004": {
+      "name": "RateLimited",
+      "category": "protocol",
+      "description": "The client has exceeded the message rate limit.",
+      "fatal": false,
+      "http_equivalent": 429
+    },
+    "3005": {
+      "name": "InvalidEnvelope",
+      "category": "protocol",
+      "description": "The binary frame could not be deserialized as a valid Envelope.",
+      "fatal": false,
+      "http_equivalent": 400
+    },
+    "4001": {
+      "name": "GroupNotFound",
+      "category": "group",
+      "description": "The specified conversation ID does not exist or does not refer to a group.",
+      "fatal": false,
+      "http_equivalent": 404
+    },
+    "4002": {
+      "name": "AlreadyMember",
+      "category": "group",
+      "description": "The user being invited is already a member of the group.",
+      "fatal": false,
+      "http_equivalent": 409
+    },
+    "4003": {
+      "name": "NotMember",
+      "category": "group",
+      "description": "The specified user is not a member of the group.",
+      "fatal": false,
+      "http_equivalent": 404
+    },
+    "4004": {
+      "name": "CannotRemoveSelf",
+      "category": "group",
+      "description": "Use group.leave instead of attempting to remove yourself from a group.",
+      "fatal": false,
+      "http_equivalent": 400
+    },
+    "4005": {
+      "name": "GroupFull",
+      "category": "group",
+      "description": "The group has reached the maximum number of members.",
+      "fatal": false,
+      "http_equivalent": 409
+    },
+    "5001": {
+      "name": "InvalidKeyPackage",
+      "category": "mls",
+      "description": "The uploaded KeyPackage is malformed or could not be parsed.",
+      "fatal": false,
+      "http_equivalent": 400
+    },
+    "5002": {
+      "name": "InvalidCommit",
+      "category": "mls",
+      "description": "The MLS Commit message is malformed or rejected by server-side validation.",
+      "fatal": false,
+      "http_equivalent": 400
+    },
+    "5003": {
+      "name": "InvalidWelcome",
+      "category": "mls",
+      "description": "The MLS Welcome message is malformed or could not be parsed.",
+      "fatal": false,
+      "http_equivalent": 400
+    },
+    "5004": {
+      "name": "EpochMismatch",
+      "category": "mls",
+      "description": "The MLS operation references an epoch that does not match the server's current state.",
+      "fatal": false,
+      "http_equivalent": 409
+    },
+    "5005": {
+      "name": "NoKeyPackageAvailable",
+      "category": "mls",
+      "description": "No KeyPackage is available for the requested user. The user needs to upload new KeyPackages.",
+      "fatal": false,
+      "http_equivalent": 404
+    },
+    "9001": {
+      "name": "InternalError",
+      "category": "internal",
+      "description": "An unexpected internal error occurred. The request could not be processed.",
+      "fatal": false,
+      "http_equivalent": 500
+    },
+    "9002": {
+      "name": "DatabaseError",
+      "category": "internal",
+      "description": "The database is unreachable or returned an unexpected error.",
+      "fatal": false,
+      "http_equivalent": 500
+    },
+    "9003": {
+      "name": "ServiceUnavailable",
+      "category": "internal",
+      "description": "The server is temporarily unavailable (maintenance, overloaded, etc.).",
+      "fatal": true,
+      "http_equivalent": 503
+    }
+  }
+}
