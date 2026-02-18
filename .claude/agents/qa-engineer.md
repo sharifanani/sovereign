@@ -32,6 +32,27 @@ sonnet
 3. **Protocol conformance**: Message format, sequencing, error handling per spec
 4. **Security tests**: Auth bypass attempts, malformed input, replay attacks
 5. **End-to-end**: Full message flow from client → server → recipient
+6. **Visual/UI smoke tests**: Use the Playwright MCP tools to verify the mobile app renders correctly in the browser
+
+## UI Smoke Testing with Playwright
+
+The mobile app runs as an Expo web app for development. You can visually verify screens using the Playwright MCP tools:
+
+1. **Start the server**: `cd /path/to/project && make build && ./build/sovereign &`
+2. **Start the Expo web app**: `cd mobile && npx expo start --web --port 19006 &` (wait ~10s for bundling)
+3. **Navigate**: Use `browser_navigate` to `http://localhost:19006`
+4. **Interact**: Use `browser_click`, `browser_type`, `browser_snapshot` to navigate through screens
+5. **Screenshot**: Use `browser_take_screenshot` to capture and verify screen renders
+6. **Verify**: Check `browser_console_messages` for errors
+
+Key screens to test:
+- Connect screen (default at `/`) — server URL input + Connect button
+- Login screen — username field + "Login with Passkey" button
+- Register screen — username + display name fields + Register button
+- Conversation list — shows after auth, has FAB for new conversations
+- Chat screen — message list + input + send button
+
+**Important**: After testing, clean up with `pkill -f "expo start"; pkill -f "build/sovereign"`.
 
 ## Process
 1. Review the relevant RFC/design doc to understand expected behavior
@@ -40,3 +61,4 @@ sonnet
 4. Coordinate with engineering agents for implementation
 5. Verify tests pass after implementation (TDD green phase)
 6. Review test coverage and add edge cases
+7. Optionally run UI smoke tests with Playwright to verify screen rendering

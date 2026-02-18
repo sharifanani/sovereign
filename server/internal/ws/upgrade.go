@@ -15,7 +15,8 @@ import (
 func UpgradeHandler(hub *Hub, maxMessageSize int, authService *auth.Service, st *store.Store, mlsSvc *mls.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{"sovereign.v1"},
+			Subprotocols:         []string{"sovereign.v1"},
+			InsecureSkipVerify:   true,
 		})
 		if err != nil {
 			log.Printf("WebSocket upgrade failed: %v", err)
