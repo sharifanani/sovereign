@@ -38,12 +38,17 @@ sonnet
 
 The mobile app runs as an Expo web app for development. You can visually verify screens using the Playwright MCP tools:
 
-1. **Start the server**: `cd /path/to/project && make build && ./build/sovereign &`
-2. **Start the Expo web app**: `cd mobile && npx expo start --web --port 19006 &` (wait ~10s for bundling)
-3. **Navigate**: Use `browser_navigate` to `http://localhost:19006`
-4. **Interact**: Use `browser_click`, `browser_type`, `browser_snapshot` to navigate through screens
-5. **Screenshot**: Use `browser_take_screenshot` to capture and verify screen renders
-6. **Verify**: Check `browser_console_messages` for errors
+1. **Start everything**: `make dev` (builds server, starts it on :8080, starts Expo web on :19006)
+2. **Wait for bundling** (~10s), then use Playwright MCP tools:
+3. **Navigate**: `browser_navigate` to `http://localhost:19006`
+4. **Interact**: `browser_click`, `browser_type`, `browser_snapshot` to navigate through screens
+5. **Screenshot**: `browser_take_screenshot` to capture and verify screen renders
+6. **Verify**: `browser_console_messages` for errors
+7. **Stop everything**: `make stop`
+
+You can also start components individually:
+- `make dev-server` — server only (foreground)
+- `make dev-mobile` — Expo web only (foreground)
 
 Key screens to test:
 - Connect screen (default at `/`) — server URL input + Connect button
@@ -51,8 +56,6 @@ Key screens to test:
 - Register screen — username + display name fields + Register button
 - Conversation list — shows after auth, has FAB for new conversations
 - Chat screen — message list + input + send button
-
-**Important**: After testing, clean up with `pkill -f "expo start"; pkill -f "build/sovereign"`.
 
 ## Process
 1. Review the relevant RFC/design doc to understand expected behavior

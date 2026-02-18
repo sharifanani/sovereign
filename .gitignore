@@ -50,6 +50,10 @@ Thumbs.db
 /build/
 /tmp/
 
+# Dev process PID files
+.server.pid
+.expo.pid
+
 # Coverage
 coverage/
 *.coverprofile
