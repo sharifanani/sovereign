@@ -1,4 +1,4 @@
-.PHONY: build test test-server test-mobile lint lint-server lint-mobile lint-admin clean dev-server dev-mobile dev proto admin-ui cross-compile stop
+.PHONY: build test test-server test-mobile lint lint-server lint-mobile lint-admin clean dev-server dev-mobile dev dev-sim proto admin-ui cross-compile stop
 
 # Build server binary with embedded admin UI
 build: admin-ui
@@ -58,6 +58,14 @@ dev: build
 	@echo "  Admin:   http://localhost:8080/admin/"
 	@echo ""
 	@echo "Run 'make stop' to shut everything down."
+
+# Run server + mobile in iOS Simulator (background server, Expo opens simulator)
+dev-sim: build
+	@echo "Starting Sovereign server on :8080..."
+	@./build/sovereign & echo $$! > .server.pid
+	@sleep 1
+	@echo "Starting Expo and opening iOS Simulator..."
+	@cd mobile && npx expo start --ios
 
 # Stop all dev processes
 stop:

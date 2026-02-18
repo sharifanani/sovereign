@@ -91,7 +91,8 @@ make lint-admin    # Admin UI tsc --noEmit only
 make clean         # Remove build artifacts
 make dev-server    # Run server in development mode (foreground)
 make dev-mobile    # Run mobile app in web browser (foreground)
-make dev           # Run both server + mobile for development (background)
+make dev           # Run both server + mobile web for development (background)
+make dev-sim       # Run server + mobile in iOS Simulator
 make stop          # Stop all dev processes started by `make dev`
 make proto         # Regenerate protobuf stubs
 ```
