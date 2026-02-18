@@ -75,16 +75,25 @@ Sovereign is a privacy-focused private messaging application where users host th
 - **Branch naming**: Use descriptive branch names. When working on issues, use `{issue-number}-{description}`.
 - **No secrets**: Never commit `.env` files, private keys, or credentials.
 
-## Build Commands
+## Build & Test Commands
+
+**Always use `make` targets** for building, testing, and linting. They handle working directories correctly and prevent mistakes. Run all make commands from the project root.
 
 ```bash
 make build         # Build server binary with embedded admin UI
-make test          # Run all tests (Go + TypeScript)
-make lint          # Lint all code
+make test          # Run ALL tests (Go + TypeScript)
+make test-server   # Run Go tests only
+make test-mobile   # Run TypeScript/Jest tests only
+make lint          # Lint all code (go vet + tsc --noEmit)
+make lint-server   # Go vet only
+make lint-mobile   # Mobile tsc --noEmit only
+make lint-admin    # Admin UI tsc --noEmit only
 make clean         # Remove build artifacts
 make dev-server    # Run server in development mode
 make proto         # Regenerate protobuf stubs
 ```
+
+Do **not** run `go test`, `npx jest`, `npx tsc`, or `npm test` directly — use the make targets instead.
 
 ## Agent System
 

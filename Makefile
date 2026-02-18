@@ -1,4 +1,4 @@
-.PHONY: build test lint clean dev-server proto admin-ui cross-compile
+.PHONY: build test test-server test-mobile lint lint-server lint-mobile lint-admin clean dev-server proto admin-ui cross-compile
 
 # Build server binary with embedded admin UI
 build: admin-ui

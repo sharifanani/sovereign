@@ -93,7 +93,7 @@ class MockWebSocket {
 
 function makeEnvelopeBuffer(envelope: Envelope): ArrayBuffer {
   const bytes = encodeEnvelope(envelope);
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 function createClient(overrides?: Partial<WebSocketClientConfig>): {

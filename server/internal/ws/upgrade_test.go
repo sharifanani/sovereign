@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	"nhooyr.io/websocket"
 
 	"github.com/sovereign-im/sovereign/server/internal/protocol"
@@ -41,7 +42,7 @@ func TestUpgradeSubprotocol(t *testing.T) {
 			go hub.Run()
 			defer hub.Stop()
 
-			handler := UpgradeHandler(hub, 65536)
+			handler := UpgradeHandler(hub, 65536, nil)
 			server := httptest.NewServer(handler)
 			defer server.Close()
 
@@ -66,20 +67,22 @@ func TestUpgradeSubprotocol(t *testing.T) {
 			defer conn.Close(websocket.StatusNormalClosure, "")
 
 			if tt.wantOK {
-				// Verify the connection works by echoing a message
+				// Verify the connection works by sending a PING
+				// (PING works during auth phase)
+				pingPayload, _ := proto.Marshal(&protocol.Ping{Timestamp: 12345})
 				env := &protocol.Envelope{
-					Type:      protocol.MessageType_MESSAGE_SEND,
+					Type:      protocol.MessageType_PING,
 					RequestId: "upgrade-test",
-					Payload:   []byte("test"),
+					Payload:   pingPayload,
 				}
 				sendEnvelope(t, ctx, conn, env)
 
 				resp := readEnvelope(t, ctx, conn)
-				if resp.Type != protocol.MessageType_MESSAGE_SEND {
-					t.Errorf("Echo type = %v, want MESSAGE_SEND", resp.Type)
+				if resp.Type != protocol.MessageType_PONG {
+					t.Errorf("Response type = %v, want PONG", resp.Type)
 				}
 				if resp.RequestId != "upgrade-test" {
-					t.Errorf("Echo RequestId = %q, want %q", resp.RequestId, "upgrade-test")
+					t.Errorf("RequestId = %q, want %q", resp.RequestId, "upgrade-test")
 				}
 			} else {
 				// Server should close the connection with StatusPolicyViolation

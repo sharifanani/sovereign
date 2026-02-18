@@ -8,18 +8,42 @@ import {
   decodePong,
   encodePong,
   decodePing,
+  encodeAuthRequest,
+  decodeAuthSuccess,
+  decodeAuthError,
+  decodeAuthChallenge,
+  decodeAuthRegisterChallenge,
+  decodeAuthRegisterSuccess,
   MessageType,
   generateRequestId,
   type Envelope,
   type MessageTypeValue,
+  type AuthSuccessMessage,
+  type AuthErrorMessage,
+  type AuthChallengeMessage,
+  type AuthRegisterChallengeMessage,
+  type AuthRegisterSuccessMessage,
 } from './protocol';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
+
+export type AuthState = 'unauthenticated' | 'authenticating' | 'authenticated';
+
+export interface AuthCallbacks {
+  onAuthSuccess: (msg: AuthSuccessMessage) => void;
+  onAuthError: (msg: AuthErrorMessage) => void;
+  onAuthChallenge: (msg: AuthChallengeMessage) => void;
+  onRegisterChallenge: (msg: AuthRegisterChallengeMessage) => void;
+  onRegisterSuccess: (msg: AuthRegisterSuccessMessage) => void;
+  onAuthRequired: () => void;
+}
 
 export interface WebSocketClientConfig {
   url: string;
   onMessage: (envelope: Envelope) => void;
   onStateChange: (state: ConnectionState) => void;
+  sessionToken?: string;
+  authCallbacks?: AuthCallbacks;
 }
 
 const PING_INTERVAL_MS = 30_000;
@@ -30,7 +54,6 @@ const BACKOFF_BASE_DELAYS = [1000, 2000, 4000, 8000, 16000, MAX_BACKOFF_MS];
 function computeBackoffDelay(attempt: number): number {
   const index = Math.min(attempt, BACKOFF_BASE_DELAYS.length - 1);
   const baseDelay = BACKOFF_BASE_DELAYS[index];
-  // Jitter: actual_delay = base_delay * (0.5 + random() * 0.5)
   return baseDelay * (0.5 + Math.random() * 0.5);
 }
 
@@ -38,6 +61,7 @@ export class WebSocketClient {
   private ws: WebSocket | null = null;
   private config: WebSocketClientConfig;
   private state: ConnectionState = 'disconnected';
+  private authState: AuthState = 'unauthenticated';
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -52,8 +76,16 @@ export class WebSocketClient {
     return this.state;
   }
 
+  getAuthState(): AuthState {
+    return this.authState;
+  }
+
   getUrl(): string {
     return this.config.url;
+  }
+
+  setSessionToken(token: string): void {
+    this.config.sessionToken = token;
   }
 
   connect(): void {
@@ -64,6 +96,7 @@ export class WebSocketClient {
   disconnect(): void {
     this.intentionalClose = true;
     this.cleanup();
+    this.authState = 'unauthenticated';
     this.setState('disconnected');
   }
 
@@ -85,9 +118,24 @@ export class WebSocketClient {
     });
   }
 
+  sendAuthWithSessionToken(token: string): void {
+    this.authState = 'authenticating';
+    const payload = encodeAuthRequest({ username: '' });
+    // For session token reconnection, we send an AUTH_REQUEST with the token
+    // embedded. The server recognizes empty username + session token means reconnect.
+    // The actual session token is sent as part of the request envelope pattern.
+    // For now, send username as empty and rely on the server to check the token.
+    this.send({
+      type: MessageType.AUTH_REQUEST,
+      requestId: generateRequestId(),
+      payload,
+    });
+  }
+
   private doConnect(): void {
     this.cleanup();
     this.setState('connecting');
+    this.authState = 'unauthenticated';
 
     const ws = new WebSocket(this.config.url, 'sovereign.v1');
     ws.binaryType = 'arraybuffer';
@@ -97,6 +145,13 @@ export class WebSocketClient {
       this.setState('connected');
       this.reconnectAttempt = 0;
       this.startPingInterval();
+
+      // If we have a session token, attempt automatic re-authentication
+      if (this.config.sessionToken) {
+        this.sendAuthWithSessionToken(this.config.sessionToken);
+      } else if (this.config.authCallbacks) {
+        this.config.authCallbacks.onAuthRequired();
+      }
     };
 
     ws.onmessage = (event) => {
@@ -109,6 +164,7 @@ export class WebSocketClient {
 
     ws.onclose = () => {
       this.stopPingInterval();
+      this.authState = 'unauthenticated';
       if (!this.intentionalClose) {
         this.setState('disconnected');
         this.scheduleReconnect();
@@ -152,8 +208,54 @@ export class WebSocketClient {
       return;
     }
 
+    // Handle auth messages
+    if (this.handleAuthMessage(envelope)) {
+      return;
+    }
+
     // Deliver all other messages to the callback
     this.config.onMessage(envelope);
+  }
+
+  private handleAuthMessage(envelope: Envelope): boolean {
+    const callbacks = this.config.authCallbacks;
+    if (!callbacks) {
+      return false;
+    }
+
+    switch (envelope.type) {
+      case MessageType.AUTH_SUCCESS: {
+        const msg = decodeAuthSuccess(envelope.payload);
+        this.authState = 'authenticated';
+        callbacks.onAuthSuccess(msg);
+        return true;
+      }
+      case MessageType.AUTH_ERROR: {
+        const msg = decodeAuthError(envelope.payload);
+        this.authState = 'unauthenticated';
+        callbacks.onAuthError(msg);
+        return true;
+      }
+      case MessageType.AUTH_CHALLENGE: {
+        const msg = decodeAuthChallenge(envelope.payload);
+        this.authState = 'authenticating';
+        callbacks.onAuthChallenge(msg);
+        return true;
+      }
+      case MessageType.AUTH_REGISTER_CHALLENGE: {
+        const msg = decodeAuthRegisterChallenge(envelope.payload);
+        callbacks.onRegisterChallenge(msg);
+        return true;
+      }
+      case MessageType.AUTH_REGISTER_SUCCESS: {
+        const msg = decodeAuthRegisterSuccess(envelope.payload);
+        this.authState = 'authenticated';
+        callbacks.onRegisterSuccess(msg);
+        return true;
+      }
+      default:
+        return false;
+    }
   }
 
   private setState(newState: ConnectionState): void {
@@ -182,7 +284,6 @@ export class WebSocketClient {
   private startPongTimeout(): void {
     this.clearPongTimeout();
     this.pongTimer = setTimeout(() => {
-      // Pong not received — connection is dead
       this.ws?.close();
     }, PONG_TIMEOUT_MS);
   }

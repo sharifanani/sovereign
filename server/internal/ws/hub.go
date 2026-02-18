@@ -9,6 +9,7 @@ import (
 type Hub struct {
 	mu    sync.RWMutex
 	conns map[string]*Conn
+	users map[string]*Conn // userID -> authenticated connection
 
 	register   chan *Conn
 	unregister chan *Conn
@@ -19,6 +20,7 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		conns:      make(map[string]*Conn),
+		users:      make(map[string]*Conn),
 		register:   make(chan *Conn),
 		unregister: make(chan *Conn),
 		done:       make(chan struct{}),
@@ -39,6 +41,9 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			if _, ok := h.conns[conn.id]; ok {
 				delete(h.conns, conn.id)
+				if conn.userID != "" {
+					delete(h.users, conn.userID)
+				}
 			}
 			h.mu.Unlock()
 			log.Printf("Connection unregistered: %s", conn.id)
@@ -64,9 +69,30 @@ func (h *Hub) Unregister(conn *Conn) {
 	h.unregister <- conn
 }
 
-// Count returns the number of active connections.
+// SetAuthenticated records a connection as authenticated for a user.
+func (h *Hub) SetAuthenticated(conn *Conn, userID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.users[userID] = conn
+}
+
+// GetConnByUserID returns the authenticated connection for a user, or nil.
+func (h *Hub) GetConnByUserID(userID string) *Conn {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.users[userID]
+}
+
+// Count returns the number of all active connections.
 func (h *Hub) Count() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.conns)
+}
+
+// AuthenticatedCount returns the number of authenticated connections.
+func (h *Hub) AuthenticatedCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.users)
 }

@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sovereign-im/sovereign/server/internal/auth"
 	"github.com/sovereign-im/sovereign/server/internal/config"
+	"github.com/sovereign-im/sovereign/server/internal/store"
 	"github.com/sovereign-im/sovereign/server/internal/ws"
 	"github.com/sovereign-im/sovereign/server/web"
 )
@@ -21,13 +23,27 @@ func main() {
 	cfg := config.DefaultConfig()
 	log.Printf("Sovereign server starting on %s", cfg.ListenAddr)
 
+	// Initialize database.
+	db, err := store.New(cfg.DatabasePath)
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+	log.Printf("Database opened: %s", cfg.DatabasePath)
+
+	// Initialize auth service.
+	authSvc, err := auth.NewService(db, cfg.RPDisplayName, cfg.RPID, cfg.RPOrigins)
+	if err != nil {
+		log.Fatalf("Failed to create auth service: %v", err)
+	}
+
 	hub := ws.NewHub()
 	go hub.Run()
 
 	mux := http.NewServeMux()
 
 	// WebSocket endpoint.
-	mux.Handle("/ws", ws.UpgradeHandler(hub, cfg.MaxMessageSize))
+	mux.Handle("/ws", ws.UpgradeHandler(hub, cfg.MaxMessageSize, authSvc))
 
 	// Embedded admin UI.
 	adminFS, err := fs.Sub(web.Dist, "dist")

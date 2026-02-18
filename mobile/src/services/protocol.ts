@@ -105,6 +105,66 @@ const ErrorType = new protobuf.Type('Error')
 
 root.add(ErrorType);
 
+// Authentication message types
+const AuthRequestType = new protobuf.Type('AuthRequest')
+  .add(new protobuf.Field('username', 1, 'string'));
+
+root.add(AuthRequestType);
+
+const AuthChallengeType = new protobuf.Type('AuthChallenge')
+  .add(new protobuf.Field('challenge', 1, 'bytes'))
+  .add(new protobuf.Field('credentialRequestOptions', 2, 'bytes'));
+
+root.add(AuthChallengeType);
+
+const AuthResponseType = new protobuf.Type('AuthResponse')
+  .add(new protobuf.Field('credentialId', 1, 'bytes'))
+  .add(new protobuf.Field('authenticatorData', 2, 'bytes'))
+  .add(new protobuf.Field('clientDataJson', 3, 'bytes'))
+  .add(new protobuf.Field('signature', 4, 'bytes'));
+
+root.add(AuthResponseType);
+
+const AuthSuccessType = new protobuf.Type('AuthSuccess')
+  .add(new protobuf.Field('sessionToken', 1, 'string'))
+  .add(new protobuf.Field('userId', 2, 'string'))
+  .add(new protobuf.Field('username', 3, 'string'))
+  .add(new protobuf.Field('displayName', 4, 'string'));
+
+root.add(AuthSuccessType);
+
+const AuthErrorType = new protobuf.Type('AuthError')
+  .add(new protobuf.Field('errorCode', 1, 'int32'))
+  .add(new protobuf.Field('message', 2, 'string'));
+
+root.add(AuthErrorType);
+
+const AuthRegisterRequestType = new protobuf.Type('AuthRegisterRequest')
+  .add(new protobuf.Field('username', 1, 'string'))
+  .add(new protobuf.Field('displayName', 2, 'string'));
+
+root.add(AuthRegisterRequestType);
+
+const AuthRegisterChallengeType = new protobuf.Type('AuthRegisterChallenge')
+  .add(new protobuf.Field('challenge', 1, 'bytes'))
+  .add(new protobuf.Field('credentialCreationOptions', 2, 'bytes'));
+
+root.add(AuthRegisterChallengeType);
+
+const AuthRegisterResponseType = new protobuf.Type('AuthRegisterResponse')
+  .add(new protobuf.Field('credentialId', 1, 'bytes'))
+  .add(new protobuf.Field('authenticatorData', 2, 'bytes'))
+  .add(new protobuf.Field('clientDataJson', 3, 'bytes'))
+  .add(new protobuf.Field('attestationObject', 4, 'bytes'));
+
+root.add(AuthRegisterResponseType);
+
+const AuthRegisterSuccessType = new protobuf.Type('AuthRegisterSuccess')
+  .add(new protobuf.Field('userId', 1, 'string'))
+  .add(new protobuf.Field('sessionToken', 2, 'string'));
+
+root.add(AuthRegisterSuccessType);
+
 // Resolve all type references
 root.resolveAll();
 
@@ -229,4 +289,187 @@ export function generateRequestId(): string {
 export function messageTypeName(type: MessageTypeValue): string {
   const entry = Object.entries(MessageType).find(([, v]) => v === type);
   return entry ? entry[0] : `UNKNOWN(${type})`;
+}
+
+// ============================================================================
+// Auth message interfaces
+// ============================================================================
+
+export interface AuthRequestMessage {
+  username: string;
+}
+
+export interface AuthChallengeMessage {
+  challenge: Uint8Array;
+  credentialRequestOptions: Uint8Array;
+}
+
+export interface AuthResponseMessage {
+  credentialId: Uint8Array;
+  authenticatorData: Uint8Array;
+  clientDataJson: Uint8Array;
+  signature: Uint8Array;
+}
+
+export interface AuthSuccessMessage {
+  sessionToken: string;
+  userId: string;
+  username: string;
+  displayName: string;
+}
+
+export interface AuthErrorMessage {
+  errorCode: number;
+  message: string;
+}
+
+export interface AuthRegisterRequestMessage {
+  username: string;
+  displayName: string;
+}
+
+export interface AuthRegisterChallengeMessage {
+  challenge: Uint8Array;
+  credentialCreationOptions: Uint8Array;
+}
+
+export interface AuthRegisterResponseMessage {
+  credentialId: Uint8Array;
+  authenticatorData: Uint8Array;
+  clientDataJson: Uint8Array;
+  attestationObject: Uint8Array;
+}
+
+export interface AuthRegisterSuccessMessage {
+  userId: string;
+  sessionToken: string;
+}
+
+// ============================================================================
+// Auth message encode/decode functions
+// ============================================================================
+
+export function encodeAuthRequest(msg: AuthRequestMessage): Uint8Array {
+  const message = AuthRequestType.create({ username: msg.username });
+  return AuthRequestType.encode(message).finish();
+}
+
+export function decodeAuthRequest(data: Uint8Array): AuthRequestMessage {
+  const decoded = AuthRequestType.decode(data);
+  const obj = AuthRequestType.toObject(decoded);
+  return { username: obj.username as string };
+}
+
+export function encodeAuthChallenge(msg: AuthChallengeMessage): Uint8Array {
+  const message = AuthChallengeType.create({
+    challenge: msg.challenge,
+    credentialRequestOptions: msg.credentialRequestOptions,
+  });
+  return AuthChallengeType.encode(message).finish();
+}
+
+export function decodeAuthChallenge(data: Uint8Array): AuthChallengeMessage {
+  const decoded = AuthChallengeType.decode(data);
+  const obj = AuthChallengeType.toObject(decoded, { bytes: Uint8Array });
+  return {
+    challenge: obj.challenge as Uint8Array,
+    credentialRequestOptions: obj.credentialRequestOptions as Uint8Array,
+  };
+}
+
+export function encodeAuthResponse(msg: AuthResponseMessage): Uint8Array {
+  const message = AuthResponseType.create({
+    credentialId: msg.credentialId,
+    authenticatorData: msg.authenticatorData,
+    clientDataJson: msg.clientDataJson,
+    signature: msg.signature,
+  });
+  return AuthResponseType.encode(message).finish();
+}
+
+export function decodeAuthResponse(data: Uint8Array): AuthResponseMessage {
+  const decoded = AuthResponseType.decode(data);
+  const obj = AuthResponseType.toObject(decoded, { bytes: Uint8Array });
+  return {
+    credentialId: obj.credentialId as Uint8Array,
+    authenticatorData: obj.authenticatorData as Uint8Array,
+    clientDataJson: obj.clientDataJson as Uint8Array,
+    signature: obj.signature as Uint8Array,
+  };
+}
+
+export function decodeAuthSuccess(data: Uint8Array): AuthSuccessMessage {
+  const decoded = AuthSuccessType.decode(data);
+  const obj = AuthSuccessType.toObject(decoded);
+  return {
+    sessionToken: obj.sessionToken as string,
+    userId: obj.userId as string,
+    username: obj.username as string,
+    displayName: obj.displayName as string,
+  };
+}
+
+export function decodeAuthError(data: Uint8Array): AuthErrorMessage {
+  const decoded = AuthErrorType.decode(data);
+  const obj = AuthErrorType.toObject(decoded);
+  return {
+    errorCode: obj.errorCode as number,
+    message: obj.message as string,
+  };
+}
+
+export function encodeAuthRegisterRequest(msg: AuthRegisterRequestMessage): Uint8Array {
+  const message = AuthRegisterRequestType.create({
+    username: msg.username,
+    displayName: msg.displayName,
+  });
+  return AuthRegisterRequestType.encode(message).finish();
+}
+
+export function decodeAuthRegisterRequest(data: Uint8Array): AuthRegisterRequestMessage {
+  const decoded = AuthRegisterRequestType.decode(data);
+  const obj = AuthRegisterRequestType.toObject(decoded);
+  return {
+    username: obj.username as string,
+    displayName: obj.displayName as string,
+  };
+}
+
+export function decodeAuthRegisterChallenge(data: Uint8Array): AuthRegisterChallengeMessage {
+  const decoded = AuthRegisterChallengeType.decode(data);
+  const obj = AuthRegisterChallengeType.toObject(decoded, { bytes: Uint8Array });
+  return {
+    challenge: obj.challenge as Uint8Array,
+    credentialCreationOptions: obj.credentialCreationOptions as Uint8Array,
+  };
+}
+
+export function encodeAuthRegisterResponse(msg: AuthRegisterResponseMessage): Uint8Array {
+  const message = AuthRegisterResponseType.create({
+    credentialId: msg.credentialId,
+    authenticatorData: msg.authenticatorData,
+    clientDataJson: msg.clientDataJson,
+    attestationObject: msg.attestationObject,
+  });
+  return AuthRegisterResponseType.encode(message).finish();
+}
+
+export function decodeAuthRegisterResponse(data: Uint8Array): AuthRegisterResponseMessage {
+  const decoded = AuthRegisterResponseType.decode(data);
+  const obj = AuthRegisterResponseType.toObject(decoded, { bytes: Uint8Array });
+  return {
+    credentialId: obj.credentialId as Uint8Array,
+    authenticatorData: obj.authenticatorData as Uint8Array,
+    clientDataJson: obj.clientDataJson as Uint8Array,
+    attestationObject: obj.attestationObject as Uint8Array,
+  };
+}
+
+export function decodeAuthRegisterSuccess(data: Uint8Array): AuthRegisterSuccessMessage {
+  const decoded = AuthRegisterSuccessType.decode(data);
+  const obj = AuthRegisterSuccessType.toObject(decoded);
+  return {
+    userId: obj.userId as string,
+    sessionToken: obj.sessionToken as string,
+  };
 }
