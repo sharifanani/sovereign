@@ -12,6 +12,7 @@ import (
 
 	"github.com/sovereign-im/sovereign/server/internal/auth"
 	"github.com/sovereign-im/sovereign/server/internal/config"
+	"github.com/sovereign-im/sovereign/server/internal/mls"
 	"github.com/sovereign-im/sovereign/server/internal/store"
 	"github.com/sovereign-im/sovereign/server/internal/ws"
 	"github.com/sovereign-im/sovereign/server/web"
@@ -37,13 +38,16 @@ func main() {
 		log.Fatalf("Failed to create auth service: %v", err)
 	}
 
+	// Initialize MLS service.
+	mlsSvc := mls.NewService(db)
+
 	hub := ws.NewHub()
 	go hub.Run()
 
 	mux := http.NewServeMux()
 
 	// WebSocket endpoint.
-	mux.Handle("/ws", ws.UpgradeHandler(hub, cfg.MaxMessageSize, authSvc))
+	mux.Handle("/ws", ws.UpgradeHandler(hub, cfg.MaxMessageSize, authSvc, db, mlsSvc))
 
 	// Embedded admin UI.
 	adminFS, err := fs.Sub(web.Dist, "dist")

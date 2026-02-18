@@ -42,7 +42,7 @@ func TestUpgradeSubprotocol(t *testing.T) {
 			go hub.Run()
 			defer hub.Stop()
 
-			handler := UpgradeHandler(hub, 65536, nil)
+			handler := UpgradeHandler(hub, 65536, nil, nil, nil)
 			server := httptest.NewServer(handler)
 			defer server.Close()
 

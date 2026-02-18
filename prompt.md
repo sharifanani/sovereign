@@ -23,7 +23,7 @@ A privacy-focused self-hosted messaging application. Users run their own server 
 - **Admin UI scaffold**: Vite + React, builds to `server/web/dist/` for Go embedding
 - **Makefile**: `build`, `test`, `lint`, `clean`, `dev-server`, `proto`, `cross-compile` targets
 
-### Phase A (WebSocket echo + client connection) — Complete, needs tests
+### Phase A (WebSocket echo + client connection) — Complete
 
 **Server (`server/`):**
 - Protobuf Go code generated from `protocol/messages.proto` into `server/internal/protocol/messages.pb.go`
@@ -52,6 +52,57 @@ A privacy-focused self-hosted messaging application. Users run their own server 
 - `mobile/__tests__/websocket.test.ts` — Connection state, send, ping/pong, reconnection backoff, intentional disconnect, message handling (17 tests)
 - All pass: `go test ./...` and `cd mobile && npx jest`
 
+### Phase B (Passkey registration and login) — Complete
+
+**Server (`server/`):**
+- `internal/auth/auth.go` — WebAuthn/passkey service using `go-webauthn` library: challenge generation, credential verification
+- `internal/store/user.go` — User CRUD operations
+- `internal/store/credential.go` — Passkey credential storage
+- `internal/store/session.go` — Session token management (hashed storage, expiry)
+- `internal/store/challenge.go` — Challenge management with TTL
+- `internal/ws/conn.go` — Auth state machine (AUTHENTICATING → READY) with 10s timeout, WebSocket close codes for auth failures (4001/4002/4004/4005)
+
+**Mobile (`mobile/`):**
+- `src/services/auth.ts` — Registration and login flows
+- `src/screens/Login.tsx` — Login UI with username input and validation
+- `src/screens/Register.tsx` — Registration UI
+- `src/state/authStore.ts` — React Context for auth state
+- `src/services/storage.ts` — Secure storage abstraction for tokens
+- `src/services/protocol.ts` — Auth message codec (RegisterChallenge, RegisterVerify, LoginChallenge, LoginVerify, AuthSuccess, AuthError)
+
+**Tests:**
+- Server: `internal/auth/auth_test.go`
+- Mobile: `__tests__/auth.test.ts`, `__tests__/authProtocol.test.ts`, `__tests__/authStore.test.ts`
+- All pass
+
+### Phase C (1:1 E2E encrypted text messaging) — Complete
+
+**Server (`server/`):**
+- `internal/store/message.go` — Message storage DAL: InsertMessage (ULID IDs), cursor-based pagination, delivery status tracking (pending→delivered→read), offline message queuing, retention-based expiry
+- `internal/store/conversation.go` — Conversation DAL: create/get conversations, add/remove members, role management, admin transfer
+- `internal/store/keypackage.go` — MLS key package store: store, consume (single-use), count, expiry cleanup
+- `internal/mls/mls.go` — MLS delivery service: key package upload/fetch, forwarding (server stores opaque blobs, no crypto)
+- `internal/ws/conn.go` — Full message handler dispatch for all Phase C types: MESSAGE_SEND routing, MESSAGE_ACK delivery tracking, GROUP_CREATE/INVITE/LEAVE, MLS key package upload/fetch, MLS Welcome forwarding, MLS Commit broadcasting
+- `internal/ws/hub.go` — Enhanced with SendToUser and BroadcastToGroup for targeted/group message delivery
+- Offline delivery: pending messages delivered on auth success
+- Dependencies: `github.com/oklog/ulid/v2`
+
+**Mobile (`mobile/`):**
+- `src/services/mls.ts` — MLS service using tweetnacl: X25519 key exchange, NaCl secretbox encryption, key package generation/parsing, group creation/joining via Welcome, clean interface for Phase D MLS library swap
+- `src/services/conversation.ts` — Conversation management: create 1:1 conversations (fetch key package → create group → send Welcome), encrypt/send messages, decrypt incoming messages, delivery status, event listener system
+- `src/services/protocol.ts` — Updated with all Phase C protobuf types (MessageSend, MessageReceive, MessageAck, MessageDelivered, GroupCreate, GroupCreated, GroupInvite, GroupMemberAdded/Removed, GroupLeave, MLS key package/welcome/commit types)
+- `src/services/websocket.ts` — MessagingCallbacks for all Phase C message type dispatch
+- `src/state/messageStore.ts` — React Context for conversations, messages, unread counts
+- `src/screens/ConversationList.tsx` — Conversation list with last message, unread badges, new conversation flow
+- `src/screens/Chat.tsx` — Encrypted messaging UI with delivery indicators, auto-scroll
+- `src/components/MessageBubble.tsx` — Message bubbles with sent/received styling, timestamps, delivery status
+- Dependencies: `tweetnacl`, `tweetnacl-util`
+
+**Tests:**
+- Server: `store/message_test.go`, `store/conversation_test.go`, `store/keypackage_test.go`, `mls/mls_test.go`, `ws/messaging_test.go`
+- Mobile: `__tests__/mls.test.ts`, `__tests__/conversation.test.ts`, `__tests__/messagingProtocol.test.ts`, `__tests__/conversationStore.test.ts`
+- All pass: 214 total tests (Go + TypeScript)
+
 ## MVP Development Phases
 
 Execute these in order (D, E, F can be parallelized after C):
@@ -60,14 +111,14 @@ Execute these in order (D, E, F can be parallelized after C):
 |-------|-------------|--------|
 | **A** | WebSocket echo server + React Native client that connects | **Done** |
 | **A.1** | Tests for Phase A (server + mobile) | **Done** |
-| **B** | Passkey registration and login (server + client) | **Next** |
-| **C** | 1:1 E2E encrypted text messaging | Pending |
-| **D** | Group chat with MLS key management | Pending |
+| **B** | Passkey registration and login (server + client) | **Done** |
+| **C** | 1:1 E2E encrypted text messaging | **Done** |
+| **D** | Group chat with MLS key management | **Next** |
 | **E** | Multi-server client (multiple simultaneous connections) | Pending |
 | **F** | Admin panel (embedded web UI for user/server management) | Pending |
 | **G** | CLI wizard, cross-compilation, docs, final security review | Pending |
 
-**Phase A.1 (tests) is the next step.**
+**Phase D is the next step.** (D, E, F can be parallelized.)
 
 ## Workflow Rules
 

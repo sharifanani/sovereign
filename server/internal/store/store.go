@@ -140,6 +140,7 @@ func (s *Store) migrate() error {
 // migrations is an ordered list of migration functions.
 var migrations = []func(*sql.Tx) error{
 	migrateV1,
+	migrateV2,
 }
 
 // migrateV1 creates the initial schema for auth (Phase B).
@@ -193,6 +194,76 @@ func migrateV1(tx *sql.Tx) error {
 			expires_at     INTEGER NOT NULL
 		)`,
 		`CREATE INDEX idx_challenge_expires_at ON challenge (expires_at)`,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("exec %q: %w", stmt[:min(len(stmt), 60)], err)
+		}
+	}
+	return nil
+}
+
+// migrateV2 creates the schema for messaging (Phase C).
+func migrateV2(tx *sql.Tx) error {
+	stmts := []string{
+		// Messages table: stores encrypted message blobs
+		`CREATE TABLE messages (
+			id               TEXT PRIMARY KEY,
+			group_id         TEXT NOT NULL,
+			sender_id        TEXT NOT NULL,
+			server_timestamp INTEGER NOT NULL,
+			payload          BLOB NOT NULL,
+			payload_size     INTEGER NOT NULL,
+			message_type     INTEGER NOT NULL DEFAULT 0,
+			epoch            INTEGER NOT NULL DEFAULT 0,
+			created_at       INTEGER NOT NULL
+		)`,
+		`CREATE INDEX idx_messages_group_timestamp ON messages(group_id, server_timestamp)`,
+		`CREATE INDEX idx_messages_sender ON messages(sender_id, server_timestamp)`,
+		`CREATE INDEX idx_messages_created_at ON messages(created_at)`,
+		`CREATE INDEX idx_messages_group_size ON messages(group_id, payload_size)`,
+
+		// Delivery tracking: per-recipient delivery state
+		`CREATE TABLE delivery_status (
+			message_id   TEXT NOT NULL,
+			recipient_id TEXT NOT NULL,
+			status       INTEGER NOT NULL DEFAULT 0,
+			delivered_at INTEGER,
+			read_at      INTEGER,
+			PRIMARY KEY (message_id, recipient_id),
+			FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX idx_delivery_pending ON delivery_status(recipient_id, status)`,
+
+		// Group membership: tracks which users are in which groups
+		`CREATE TABLE group_members (
+			group_id  TEXT NOT NULL,
+			user_id   TEXT NOT NULL,
+			role      TEXT NOT NULL DEFAULT 'member',
+			joined_at INTEGER NOT NULL,
+			PRIMARY KEY (group_id, user_id)
+		)`,
+		`CREATE INDEX idx_group_members_user ON group_members(user_id)`,
+
+		// Conversations metadata
+		`CREATE TABLE conversations (
+			id         TEXT PRIMARY KEY,
+			title      TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
+
+		// Key packages: opaque MLS key package blobs
+		`CREATE TABLE key_packages (
+			id               TEXT PRIMARY KEY,
+			user_id          TEXT NOT NULL,
+			key_package_data BLOB NOT NULL,
+			created_at       INTEGER NOT NULL,
+			expires_at       INTEGER NOT NULL
+		)`,
+		`CREATE INDEX idx_key_packages_user ON key_packages(user_id)`,
+		`CREATE INDEX idx_key_packages_expires ON key_packages(expires_at)`,
 	}
 
 	for _, stmt := range stmts {

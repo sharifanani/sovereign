@@ -8,183 +8,128 @@ import {
   StyleSheet,
   type ListRenderItemInfo,
 } from 'react-native';
-import { WebSocketClient, type ConnectionState } from '../services/websocket';
-import {
-  type Envelope,
-  MessageType,
-  encodePing,
-  decodePing,
-  generateRequestId,
-  messageTypeName,
-} from '../services/protocol';
+import { useMessages } from '../state/messageStore';
+import { conversationService, type StoredMessage } from '../services/conversation';
+import { mlsService } from '../services/mls';
+import MessageBubble from '../components/MessageBubble';
 
-interface ChatMessage {
-  id: string;
-  text: string;
-  direction: 'sent' | 'received';
-  timestamp: number;
+interface ChatProps {
+  conversationId: string;
+  onBack: () => void;
 }
 
-const DEFAULT_SERVER_URL = 'ws://localhost:8080/ws';
-
-const Chat: React.FC = () => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+const Chat: React.FC<ChatProps> = ({ conversationId, onBack }) => {
+  const { state, actions } = useMessages();
   const [inputText, setInputText] = useState('');
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
-  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
-  const [editingUrl, setEditingUrl] = useState(false);
-  const [urlDraft, setUrlDraft] = useState(DEFAULT_SERVER_URL);
-  const clientRef = useRef<WebSocketClient | null>(null);
-  const flatListRef = useRef<FlatList<ChatMessage>>(null);
+  const flatListRef = useRef<FlatList<StoredMessage>>(null);
 
-  const handleMessage = useCallback((envelope: Envelope) => {
-    // For Phase A echo testing: display whatever comes back
-    let displayText: string;
+  const conversation = state.conversations.find((c) => c.id === conversationId);
+  const messages = state.messages[conversationId] ?? [];
+  const currentUserId = mlsService.getUserId();
 
-    if (envelope.type === MessageType.PING && envelope.payload.length > 0) {
-      const ping = decodePing(envelope.payload);
-      displayText = `[PING] timestamp=${ping.timestamp}`;
-    } else if (envelope.type === MessageType.ERROR) {
-      // Just show raw info for errors
-      displayText = `[ERROR] payload=${envelope.payload.length} bytes`;
-    } else {
-      displayText = `[${messageTypeName(envelope.type)}] reqId=${envelope.requestId} payload=${envelope.payload.length}b`;
-    }
-
-    const msg: ChatMessage = {
-      id: `recv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: displayText,
-      direction: 'received',
-      timestamp: Date.now(),
-    };
-    setMessages((prev) => [...prev, msg]);
-  }, []);
-
-  const handleStateChange = useCallback((state: ConnectionState) => {
-    setConnectionState(state);
-  }, []);
-
-  const connectToServer = useCallback(() => {
-    if (clientRef.current) {
-      clientRef.current.disconnect();
-    }
-    const client = new WebSocketClient({
-      url: serverUrl,
-      onMessage: handleMessage,
-      onStateChange: handleStateChange,
-    });
-    clientRef.current = client;
-    client.connect();
-  }, [serverUrl, handleMessage, handleStateChange]);
-
-  const disconnectFromServer = useCallback(() => {
-    clientRef.current?.disconnect();
-    clientRef.current = null;
-  }, []);
-
-  // Cleanup on unmount
+  // Mark conversation as read when opened
   useEffect(() => {
-    return () => {
-      clientRef.current?.disconnect();
+    actions.markAsRead(conversationId);
+    conversationService.markAsRead(conversationId);
+  }, [conversationId, actions]);
+
+  // Sync messages from conversation service into state
+  useEffect(() => {
+    const storedMessages = conversationService.getMessages(conversationId);
+    if (storedMessages.length > 0) {
+      actions.setMessages(conversationId, storedMessages);
+    }
+  }, [conversationId, actions]);
+
+  // Listen for conversation events
+  useEffect(() => {
+    const handler = (event: { type: string; conversationId: string; message?: StoredMessage; deliveredMessageId?: string }) => {
+      if (event.conversationId !== conversationId) return;
+
+      switch (event.type) {
+        case 'message_received':
+          if (event.message) {
+            actions.addMessage(conversationId, event.message);
+            actions.markAsRead(conversationId);
+            conversationService.markAsRead(conversationId);
+          }
+          break;
+        case 'message_sent':
+          if (event.message) {
+            // Refresh messages from service to get updated status
+            actions.setMessages(conversationId, conversationService.getMessages(conversationId));
+          }
+          break;
+        case 'message_delivered':
+          if (event.deliveredMessageId) {
+            actions.updateMessageStatus(event.deliveredMessageId, 'delivered');
+          }
+          break;
+      }
     };
-  }, []);
+
+    conversationService.addEventListener(handler);
+    return () => {
+      conversationService.removeEventListener(handler);
+    };
+  }, [conversationId, actions]);
 
   const sendMessage = useCallback(() => {
     const text = inputText.trim();
-    if (!text || connectionState !== 'connected') {
-      return;
+    if (!text) return;
+
+    const msg = conversationService.sendMessage(conversationId, text);
+    if (msg) {
+      actions.addMessage(conversationId, msg);
+      setInputText('');
     }
+  }, [inputText, conversationId, actions]);
 
-    // Wrap text in a Ping envelope for Phase A echo testing
-    const timestamp = Date.now() * 1000; // Unix microseconds
-    const payload = encodePing({ timestamp });
-    const requestId = generateRequestId();
+  const renderMessage = useCallback(
+    ({ item }: ListRenderItemInfo<StoredMessage>) => {
+      const isMine = item.senderId === currentUserId;
+      return (
+        <MessageBubble
+          content={item.text}
+          isMine={isMine}
+          timestamp={item.timestamp}
+          senderName={isMine ? undefined : item.senderId}
+          status={isMine ? item.status : undefined}
+        />
+      );
+    },
+    [currentUserId],
+  );
 
-    const envelope: Envelope = {
-      type: MessageType.PING,
-      requestId,
-      payload,
-    };
+  const keyExtractor = useCallback((item: StoredMessage) => item.id, []);
 
-    clientRef.current?.send(envelope);
-
-    const msg: ChatMessage = {
-      id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: `[PING] ${text} (ts=${timestamp})`,
-      direction: 'sent',
-      timestamp: Date.now(),
-    };
-    setMessages((prev) => [...prev, msg]);
-    setInputText('');
-  }, [inputText, connectionState]);
-
-  const renderMessage = useCallback(({ item }: ListRenderItemInfo<ChatMessage>) => {
-    const isSent = item.direction === 'sent';
-    return (
-      <View style={[styles.messageBubble, isSent ? styles.sentBubble : styles.receivedBubble]}>
-        <Text style={[styles.messageText, isSent ? styles.sentText : styles.receivedText]}>
-          {item.text}
-        </Text>
-        <Text style={styles.timestampText}>
-          {new Date(item.timestamp).toLocaleTimeString()}
-        </Text>
-      </View>
-    );
-  }, []);
-
-  const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
-
-  const statusColor =
-    connectionState === 'connected'
-      ? '#4CAF50'
-      : connectionState === 'connecting'
-        ? '#FF9800'
-        : '#F44336';
+  const title = conversation?.title ?? 'Chat';
+  const hasEncryption = mlsService.hasGroup(conversationId);
 
   return (
     <View style={styles.container}>
-      {/* Header with connection status */}
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.statusRow}>
-          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-          <Text style={styles.statusText}>{connectionState.toUpperCase()}</Text>
-        </View>
-        {editingUrl ? (
-          <View style={styles.urlEditRow}>
-            <TextInput
-              style={styles.urlInput}
-              value={urlDraft}
-              onChangeText={setUrlDraft}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="ws://host:port/ws"
-            />
-            <TouchableOpacity
-              style={styles.urlButton}
-              onPress={() => {
-                setServerUrl(urlDraft);
-                setEditingUrl(false);
-              }}
-            >
-              <Text style={styles.urlButtonText}>Save</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity onPress={() => setEditingUrl(true)}>
-            <Text style={styles.serverUrlText}>{serverUrl}</Text>
-          </TouchableOpacity>
-        )}
-        <View style={styles.controlRow}>
-          <TouchableOpacity
-            style={[styles.controlButton, connectionState === 'connected' && styles.controlButtonActive]}
-            onPress={connectionState === 'disconnected' ? connectToServer : disconnectFromServer}
-          >
-            <Text style={styles.controlButtonText}>
-              {connectionState === 'disconnected' ? 'Connect' : 'Disconnect'}
-            </Text>
-          </TouchableOpacity>
+        <TouchableOpacity style={styles.backButton} onPress={onBack}>
+          <Text style={styles.backText}>{'\u2190'}</Text>
+        </TouchableOpacity>
+        <View style={styles.headerInfo}>
+          <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
+          {hasEncryption ? (
+            <Text style={styles.headerSubtitle}>End-to-end encrypted</Text>
+          ) : null}
         </View>
       </View>
+
+      {/* Encryption banner for new conversations */}
+      {messages.length === 0 && hasEncryption ? (
+        <View style={styles.encryptionBanner}>
+          <Text style={styles.encryptionText}>
+            End-to-end encrypted conversation.{'\n'}
+            Messages are visible only to participants.
+          </Text>
+        </View>
+      ) : null}
 
       {/* Message list */}
       <FlatList
@@ -197,6 +142,7 @@ const Chat: React.FC = () => {
         onContentSizeChange={() => {
           flatListRef.current?.scrollToEnd({ animated: true });
         }}
+        inverted={false}
       />
 
       {/* Input area */}
@@ -205,16 +151,17 @@ const Chat: React.FC = () => {
           style={styles.textInput}
           value={inputText}
           onChangeText={setInputText}
-          placeholder={connectionState === 'connected' ? 'Type a message...' : 'Connect to send'}
+          placeholder={hasEncryption ? 'Type a message...' : 'Encryption not ready'}
           placeholderTextColor="#999"
-          editable={connectionState === 'connected'}
+          editable={hasEncryption}
           onSubmitEditing={sendMessage}
           returnKeyType="send"
+          multiline={false}
         />
         <TouchableOpacity
-          style={[styles.sendButton, connectionState !== 'connected' && styles.sendButtonDisabled]}
+          style={[styles.sendButton, (!hasEncryption || !inputText.trim()) && styles.sendButtonDisabled]}
           onPress={sendMessage}
-          disabled={connectionState !== 'connected'}
+          disabled={!hasEncryption || !inputText.trim()}
         >
           <Text style={styles.sendButtonText}>Send</Text>
         </TouchableOpacity>
@@ -230,111 +177,52 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: '#1A1A2E',
-    paddingTop: 48,
-    paddingHorizontal: 16,
+    paddingTop: 52,
+    paddingHorizontal: 12,
     paddingBottom: 12,
-  },
-  statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
   },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
-  },
-  statusText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 1,
-  },
-  serverUrlText: {
-    color: '#AAAACC',
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  urlEditRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  urlInput: {
-    flex: 1,
-    backgroundColor: '#2A2A4E',
-    color: '#FFFFFF',
+  backButton: {
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 4,
-    fontSize: 12,
-    marginRight: 8,
   },
-  urlButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 4,
-  },
-  urlButtonText: {
+  backText: {
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: 24,
+  },
+  headerInfo: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  headerTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
     fontWeight: '600',
   },
-  controlRow: {
-    flexDirection: 'row',
+  headerSubtitle: {
+    color: '#AAAACC',
+    fontSize: 12,
+    marginTop: 2,
   },
-  controlButton: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 6,
+  encryptionBanner: {
+    backgroundColor: '#E8F5E9',
+    padding: 16,
+    marginHorizontal: 12,
+    marginTop: 12,
+    borderRadius: 8,
   },
-  controlButtonActive: {
-    backgroundColor: '#F44336',
-  },
-  controlButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
+  encryptionText: {
+    color: '#2E7D32',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
   },
   messageList: {
     flex: 1,
   },
   messageListContent: {
-    padding: 12,
-  },
-  messageBubble: {
-    maxWidth: '80%',
-    padding: 10,
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  sentBubble: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#1A1A2E',
-  },
-  receivedBubble: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-  },
-  messageText: {
-    fontSize: 14,
-  },
-  sentText: {
-    color: '#FFFFFF',
-  },
-  receivedText: {
-    color: '#333333',
-  },
-  timestampText: {
-    fontSize: 10,
-    color: '#999999',
-    marginTop: 4,
-    alignSelf: 'flex-end',
+    paddingVertical: 8,
   },
   inputContainer: {
     flexDirection: 'row',
@@ -349,9 +237,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    fontSize: 14,
+    fontSize: 15,
     color: '#333333',
     marginRight: 8,
+    maxHeight: 100,
   },
   sendButton: {
     backgroundColor: '#1A1A2E',
@@ -364,7 +253,7 @@ const styles = StyleSheet.create({
   },
   sendButtonText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
   },
 });

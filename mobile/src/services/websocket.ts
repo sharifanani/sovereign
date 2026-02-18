@@ -14,6 +14,14 @@ import {
   decodeAuthChallenge,
   decodeAuthRegisterChallenge,
   decodeAuthRegisterSuccess,
+  decodeMessageReceive,
+  decodeMessageDelivered,
+  decodeGroupCreated,
+  decodeGroupMemberAdded,
+  decodeGroupMemberRemoved,
+  decodeMLSKeyPackageResponse,
+  decodeMLSWelcomeReceive,
+  decodeMLSCommitBroadcast,
   MessageType,
   generateRequestId,
   type Envelope,
@@ -23,6 +31,14 @@ import {
   type AuthChallengeMessage,
   type AuthRegisterChallengeMessage,
   type AuthRegisterSuccessMessage,
+  type MessageReceiveMessage,
+  type MessageDeliveredMessage,
+  type GroupCreatedMessage,
+  type GroupMemberAddedMessage,
+  type GroupMemberRemovedMessage,
+  type MLSKeyPackageResponseMessage,
+  type MLSWelcomeReceiveMessage,
+  type MLSCommitBroadcastMessage,
 } from './protocol';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
@@ -38,12 +54,24 @@ export interface AuthCallbacks {
   onAuthRequired: () => void;
 }
 
+export interface MessagingCallbacks {
+  onMessageReceive: (envelope: Envelope, msg: MessageReceiveMessage) => void;
+  onMessageDelivered: (msg: MessageDeliveredMessage) => void;
+  onGroupCreated: (envelope: Envelope, msg: GroupCreatedMessage) => void;
+  onGroupMemberAdded: (msg: GroupMemberAddedMessage) => void;
+  onGroupMemberRemoved: (msg: GroupMemberRemovedMessage) => void;
+  onKeyPackageResponse: (envelope: Envelope, msg: MLSKeyPackageResponseMessage) => void;
+  onWelcomeReceive: (msg: MLSWelcomeReceiveMessage) => void;
+  onCommitBroadcast: (msg: MLSCommitBroadcastMessage) => void;
+}
+
 export interface WebSocketClientConfig {
   url: string;
   onMessage: (envelope: Envelope) => void;
   onStateChange: (state: ConnectionState) => void;
   sessionToken?: string;
   authCallbacks?: AuthCallbacks;
+  messagingCallbacks?: MessagingCallbacks;
 }
 
 const PING_INTERVAL_MS = 30_000;
@@ -213,6 +241,11 @@ export class WebSocketClient {
       return;
     }
 
+    // Handle messaging/group/MLS messages
+    if (this.handleMessagingMessage(envelope)) {
+      return;
+    }
+
     // Deliver all other messages to the callback
     this.config.onMessage(envelope);
   }
@@ -251,6 +284,58 @@ export class WebSocketClient {
         const msg = decodeAuthRegisterSuccess(envelope.payload);
         this.authState = 'authenticated';
         callbacks.onRegisterSuccess(msg);
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  private handleMessagingMessage(envelope: Envelope): boolean {
+    const callbacks = this.config.messagingCallbacks;
+    if (!callbacks) {
+      return false;
+    }
+
+    switch (envelope.type) {
+      case MessageType.MESSAGE_RECEIVE: {
+        const msg = decodeMessageReceive(envelope.payload);
+        callbacks.onMessageReceive(envelope, msg);
+        return true;
+      }
+      case MessageType.MESSAGE_DELIVERED: {
+        const msg = decodeMessageDelivered(envelope.payload);
+        callbacks.onMessageDelivered(msg);
+        return true;
+      }
+      case MessageType.GROUP_CREATED: {
+        const msg = decodeGroupCreated(envelope.payload);
+        callbacks.onGroupCreated(envelope, msg);
+        return true;
+      }
+      case MessageType.GROUP_MEMBER_ADDED: {
+        const msg = decodeGroupMemberAdded(envelope.payload);
+        callbacks.onGroupMemberAdded(msg);
+        return true;
+      }
+      case MessageType.GROUP_MEMBER_REMOVED: {
+        const msg = decodeGroupMemberRemoved(envelope.payload);
+        callbacks.onGroupMemberRemoved(msg);
+        return true;
+      }
+      case MessageType.MLS_KEY_PACKAGE_RESPONSE: {
+        const msg = decodeMLSKeyPackageResponse(envelope.payload);
+        callbacks.onKeyPackageResponse(envelope, msg);
+        return true;
+      }
+      case MessageType.MLS_WELCOME_RECEIVE: {
+        const msg = decodeMLSWelcomeReceive(envelope.payload);
+        callbacks.onWelcomeReceive(msg);
+        return true;
+      }
+      case MessageType.MLS_COMMIT_BROADCAST: {
+        const msg = decodeMLSCommitBroadcast(envelope.payload);
+        callbacks.onCommitBroadcast(msg);
         return true;
       }
       default:

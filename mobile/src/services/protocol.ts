@@ -165,6 +165,135 @@ const AuthRegisterSuccessType = new protobuf.Type('AuthRegisterSuccess')
 
 root.add(AuthRegisterSuccessType);
 
+// ============================================================================
+// Messaging message types
+// ============================================================================
+
+const MessageSendType = new protobuf.Type('MessageSend')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('encryptedPayload', 2, 'bytes'))
+  .add(new protobuf.Field('messageType', 3, 'string'));
+
+root.add(MessageSendType);
+
+const MessageReceiveType = new protobuf.Type('MessageReceive')
+  .add(new protobuf.Field('messageId', 1, 'string'))
+  .add(new protobuf.Field('conversationId', 2, 'string'))
+  .add(new protobuf.Field('senderId', 3, 'string'))
+  .add(new protobuf.Field('encryptedPayload', 4, 'bytes'))
+  .add(new protobuf.Field('serverTimestamp', 5, 'int64'))
+  .add(new protobuf.Field('messageType', 6, 'string'));
+
+root.add(MessageReceiveType);
+
+const MessageAckType = new protobuf.Type('MessageAck')
+  .add(new protobuf.Field('messageId', 1, 'string'));
+
+root.add(MessageAckType);
+
+const MessageDeliveredType = new protobuf.Type('MessageDelivered')
+  .add(new protobuf.Field('messageId', 1, 'string'))
+  .add(new protobuf.Field('deliveredTo', 2, 'string'));
+
+root.add(MessageDeliveredType);
+
+// ============================================================================
+// Group message types
+// ============================================================================
+
+const GroupMemberType = new protobuf.Type('GroupMember')
+  .add(new protobuf.Field('userId', 1, 'string'))
+  .add(new protobuf.Field('username', 2, 'string'))
+  .add(new protobuf.Field('displayName', 3, 'string'))
+  .add(new protobuf.Field('role', 4, 'string'));
+
+root.add(GroupMemberType);
+
+const GroupCreateType = new protobuf.Type('GroupCreate')
+  .add(new protobuf.Field('title', 1, 'string'))
+  .add(new protobuf.Field('memberIds', 2, 'string', 'repeated'));
+
+root.add(GroupCreateType);
+
+const GroupCreatedType = new protobuf.Type('GroupCreated')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('title', 2, 'string'))
+  .add(new protobuf.Field('members', 3, 'GroupMember', 'repeated'));
+
+root.add(GroupCreatedType);
+
+const GroupInviteType = new protobuf.Type('GroupInvite')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('userId', 2, 'string'));
+
+root.add(GroupInviteType);
+
+const GroupMemberAddedType = new protobuf.Type('GroupMemberAdded')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('userId', 2, 'string'))
+  .add(new protobuf.Field('addedBy', 3, 'string'));
+
+root.add(GroupMemberAddedType);
+
+const GroupMemberRemovedType = new protobuf.Type('GroupMemberRemoved')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('userId', 2, 'string'))
+  .add(new protobuf.Field('removedBy', 3, 'string'));
+
+root.add(GroupMemberRemovedType);
+
+const GroupLeaveType = new protobuf.Type('GroupLeave')
+  .add(new protobuf.Field('conversationId', 1, 'string'));
+
+root.add(GroupLeaveType);
+
+// ============================================================================
+// MLS Key Management message types
+// ============================================================================
+
+const MLSKeyPackageUploadType = new protobuf.Type('MLSKeyPackageUpload')
+  .add(new protobuf.Field('keyPackageData', 1, 'bytes'));
+
+root.add(MLSKeyPackageUploadType);
+
+const MLSKeyPackageFetchType = new protobuf.Type('MLSKeyPackageFetch')
+  .add(new protobuf.Field('userId', 1, 'string'));
+
+root.add(MLSKeyPackageFetchType);
+
+const MLSKeyPackageResponseType = new protobuf.Type('MLSKeyPackageResponse')
+  .add(new protobuf.Field('userId', 1, 'string'))
+  .add(new protobuf.Field('keyPackageData', 2, 'bytes'));
+
+root.add(MLSKeyPackageResponseType);
+
+const MLSWelcomeType = new protobuf.Type('MLSWelcome')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('recipientId', 2, 'string'))
+  .add(new protobuf.Field('welcomeData', 3, 'bytes'));
+
+root.add(MLSWelcomeType);
+
+const MLSWelcomeReceiveType = new protobuf.Type('MLSWelcomeReceive')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('senderId', 2, 'string'))
+  .add(new protobuf.Field('welcomeData', 3, 'bytes'));
+
+root.add(MLSWelcomeReceiveType);
+
+const MLSCommitType = new protobuf.Type('MLSCommit')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('commitData', 2, 'bytes'));
+
+root.add(MLSCommitType);
+
+const MLSCommitBroadcastType = new protobuf.Type('MLSCommitBroadcast')
+  .add(new protobuf.Field('conversationId', 1, 'string'))
+  .add(new protobuf.Field('senderId', 2, 'string'))
+  .add(new protobuf.Field('commitData', 3, 'bytes'));
+
+root.add(MLSCommitBroadcastType);
+
 // Resolve all type references
 root.resolveAll();
 
@@ -471,5 +600,277 @@ export function decodeAuthRegisterSuccess(data: Uint8Array): AuthRegisterSuccess
   return {
     userId: obj.userId as string,
     sessionToken: obj.sessionToken as string,
+  };
+}
+
+// ============================================================================
+// Messaging message interfaces
+// ============================================================================
+
+export interface MessageSendMessage {
+  conversationId: string;
+  encryptedPayload: Uint8Array;
+  messageType: string;
+}
+
+export interface MessageReceiveMessage {
+  messageId: string;
+  conversationId: string;
+  senderId: string;
+  encryptedPayload: Uint8Array;
+  serverTimestamp: number;
+  messageType: string;
+}
+
+export interface MessageAckMessage {
+  messageId: string;
+}
+
+export interface MessageDeliveredMessage {
+  messageId: string;
+  deliveredTo: string;
+}
+
+// ============================================================================
+// Group message interfaces
+// ============================================================================
+
+export interface GroupMemberInfo {
+  userId: string;
+  username: string;
+  displayName: string;
+  role: string;
+}
+
+export interface GroupCreateMessage {
+  title: string;
+  memberIds: string[];
+}
+
+export interface GroupCreatedMessage {
+  conversationId: string;
+  title: string;
+  members: GroupMemberInfo[];
+}
+
+export interface GroupInviteMessage {
+  conversationId: string;
+  userId: string;
+}
+
+export interface GroupMemberAddedMessage {
+  conversationId: string;
+  userId: string;
+  addedBy: string;
+}
+
+export interface GroupMemberRemovedMessage {
+  conversationId: string;
+  userId: string;
+  removedBy: string;
+}
+
+export interface GroupLeaveMessage {
+  conversationId: string;
+}
+
+// ============================================================================
+// MLS Key Management interfaces
+// ============================================================================
+
+export interface MLSKeyPackageUploadMessage {
+  keyPackageData: Uint8Array;
+}
+
+export interface MLSKeyPackageFetchMessage {
+  userId: string;
+}
+
+export interface MLSKeyPackageResponseMessage {
+  userId: string;
+  keyPackageData: Uint8Array;
+}
+
+export interface MLSWelcomeMessage {
+  conversationId: string;
+  recipientId: string;
+  welcomeData: Uint8Array;
+}
+
+export interface MLSWelcomeReceiveMessage {
+  conversationId: string;
+  senderId: string;
+  welcomeData: Uint8Array;
+}
+
+export interface MLSCommitMessage {
+  conversationId: string;
+  commitData: Uint8Array;
+}
+
+export interface MLSCommitBroadcastMessage {
+  conversationId: string;
+  senderId: string;
+  commitData: Uint8Array;
+}
+
+// ============================================================================
+// Messaging encode/decode functions
+// ============================================================================
+
+export function encodeMessageSend(msg: MessageSendMessage): Uint8Array {
+  const message = MessageSendType.create({
+    conversationId: msg.conversationId,
+    encryptedPayload: msg.encryptedPayload,
+    messageType: msg.messageType,
+  });
+  return MessageSendType.encode(message).finish();
+}
+
+export function decodeMessageReceive(data: Uint8Array): MessageReceiveMessage {
+  const decoded = MessageReceiveType.decode(data);
+  const obj = MessageReceiveType.toObject(decoded, { bytes: Uint8Array, longs: Number });
+  return {
+    messageId: obj.messageId as string,
+    conversationId: obj.conversationId as string,
+    senderId: obj.senderId as string,
+    encryptedPayload: obj.encryptedPayload as Uint8Array,
+    serverTimestamp: obj.serverTimestamp as number,
+    messageType: obj.messageType as string,
+  };
+}
+
+export function encodeMessageAck(msg: MessageAckMessage): Uint8Array {
+  const message = MessageAckType.create({ messageId: msg.messageId });
+  return MessageAckType.encode(message).finish();
+}
+
+export function decodeMessageDelivered(data: Uint8Array): MessageDeliveredMessage {
+  const decoded = MessageDeliveredType.decode(data);
+  const obj = MessageDeliveredType.toObject(decoded);
+  return {
+    messageId: obj.messageId as string,
+    deliveredTo: obj.deliveredTo as string,
+  };
+}
+
+// ============================================================================
+// Group encode/decode functions
+// ============================================================================
+
+export function encodeGroupCreate(msg: GroupCreateMessage): Uint8Array {
+  const message = GroupCreateType.create({
+    title: msg.title,
+    memberIds: msg.memberIds,
+  });
+  return GroupCreateType.encode(message).finish();
+}
+
+export function decodeGroupCreated(data: Uint8Array): GroupCreatedMessage {
+  const decoded = GroupCreatedType.decode(data);
+  const obj = GroupCreatedType.toObject(decoded);
+  const members = (obj.members as Array<Record<string, unknown>> | undefined) ?? [];
+  return {
+    conversationId: obj.conversationId as string,
+    title: obj.title as string,
+    members: members.map((m) => ({
+      userId: m.userId as string,
+      username: m.username as string,
+      displayName: m.displayName as string,
+      role: m.role as string,
+    })),
+  };
+}
+
+export function encodeGroupInvite(msg: GroupInviteMessage): Uint8Array {
+  const message = GroupInviteType.create({
+    conversationId: msg.conversationId,
+    userId: msg.userId,
+  });
+  return GroupInviteType.encode(message).finish();
+}
+
+export function decodeGroupMemberAdded(data: Uint8Array): GroupMemberAddedMessage {
+  const decoded = GroupMemberAddedType.decode(data);
+  const obj = GroupMemberAddedType.toObject(decoded);
+  return {
+    conversationId: obj.conversationId as string,
+    userId: obj.userId as string,
+    addedBy: obj.addedBy as string,
+  };
+}
+
+export function decodeGroupMemberRemoved(data: Uint8Array): GroupMemberRemovedMessage {
+  const decoded = GroupMemberRemovedType.decode(data);
+  const obj = GroupMemberRemovedType.toObject(decoded);
+  return {
+    conversationId: obj.conversationId as string,
+    userId: obj.userId as string,
+    removedBy: obj.removedBy as string,
+  };
+}
+
+export function encodeGroupLeave(msg: GroupLeaveMessage): Uint8Array {
+  const message = GroupLeaveType.create({ conversationId: msg.conversationId });
+  return GroupLeaveType.encode(message).finish();
+}
+
+// ============================================================================
+// MLS Key Management encode/decode functions
+// ============================================================================
+
+export function encodeMLSKeyPackageUpload(msg: MLSKeyPackageUploadMessage): Uint8Array {
+  const message = MLSKeyPackageUploadType.create({ keyPackageData: msg.keyPackageData });
+  return MLSKeyPackageUploadType.encode(message).finish();
+}
+
+export function encodeMLSKeyPackageFetch(msg: MLSKeyPackageFetchMessage): Uint8Array {
+  const message = MLSKeyPackageFetchType.create({ userId: msg.userId });
+  return MLSKeyPackageFetchType.encode(message).finish();
+}
+
+export function decodeMLSKeyPackageResponse(data: Uint8Array): MLSKeyPackageResponseMessage {
+  const decoded = MLSKeyPackageResponseType.decode(data);
+  const obj = MLSKeyPackageResponseType.toObject(decoded, { bytes: Uint8Array });
+  return {
+    userId: obj.userId as string,
+    keyPackageData: obj.keyPackageData as Uint8Array,
+  };
+}
+
+export function encodeMLSWelcome(msg: MLSWelcomeMessage): Uint8Array {
+  const message = MLSWelcomeType.create({
+    conversationId: msg.conversationId,
+    recipientId: msg.recipientId,
+    welcomeData: msg.welcomeData,
+  });
+  return MLSWelcomeType.encode(message).finish();
+}
+
+export function decodeMLSWelcomeReceive(data: Uint8Array): MLSWelcomeReceiveMessage {
+  const decoded = MLSWelcomeReceiveType.decode(data);
+  const obj = MLSWelcomeReceiveType.toObject(decoded, { bytes: Uint8Array });
+  return {
+    conversationId: obj.conversationId as string,
+    senderId: obj.senderId as string,
+    welcomeData: obj.welcomeData as Uint8Array,
+  };
+}
+
+export function encodeMLSCommit(msg: MLSCommitMessage): Uint8Array {
+  const message = MLSCommitType.create({
+    conversationId: msg.conversationId,
+    commitData: msg.commitData,
+  });
+  return MLSCommitType.encode(message).finish();
+}
+
+export function decodeMLSCommitBroadcast(data: Uint8Array): MLSCommitBroadcastMessage {
+  const decoded = MLSCommitBroadcastType.decode(data);
+  const obj = MLSCommitBroadcastType.toObject(decoded, { bytes: Uint8Array });
+  return {
+    conversationId: obj.conversationId as string,
+    senderId: obj.senderId as string,
+    commitData: obj.commitData as Uint8Array,
   };
 }

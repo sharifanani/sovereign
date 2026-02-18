@@ -3,6 +3,10 @@ package ws
 import (
 	"log"
 	"sync"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/sovereign-im/sovereign/server/internal/protocol"
 )
 
 // Hub manages active WebSocket connections and message routing.
@@ -81,6 +85,55 @@ func (h *Hub) GetConnByUserID(userID string) *Conn {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.users[userID]
+}
+
+// SendToUser sends a serialized envelope to a specific user if they are online.
+// Returns true if the user was online and the message was queued.
+func (h *Hub) SendToUser(userID string, env *protocol.Envelope) bool {
+	data, err := proto.Marshal(env)
+	if err != nil {
+		log.Printf("Hub.SendToUser: marshal error: %v", err)
+		return false
+	}
+	h.mu.RLock()
+	conn := h.users[userID]
+	h.mu.RUnlock()
+	if conn == nil {
+		return false
+	}
+	select {
+	case conn.send <- data:
+		return true
+	default:
+		log.Printf("Hub.SendToUser: send buffer full for user %s", userID)
+		return false
+	}
+}
+
+// BroadcastToGroup sends an envelope to all online members of a group,
+// optionally excluding one user (typically the sender).
+func (h *Hub) BroadcastToGroup(memberIDs []string, env *protocol.Envelope, excludeUserID string) {
+	data, err := proto.Marshal(env)
+	if err != nil {
+		log.Printf("Hub.BroadcastToGroup: marshal error: %v", err)
+		return
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, uid := range memberIDs {
+		if uid == excludeUserID {
+			continue
+		}
+		conn := h.users[uid]
+		if conn == nil {
+			continue
+		}
+		select {
+		case conn.send <- data:
+		default:
+			log.Printf("Hub.BroadcastToGroup: send buffer full for user %s", uid)
+		}
+	}
 }
 
 // Count returns the number of all active connections.

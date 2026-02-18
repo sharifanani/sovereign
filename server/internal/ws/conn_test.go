@@ -12,6 +12,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"github.com/sovereign-im/sovereign/server/internal/auth"
+	"github.com/sovereign-im/sovereign/server/internal/mls"
 	"github.com/sovereign-im/sovereign/server/internal/protocol"
 	"github.com/sovereign-im/sovereign/server/internal/store"
 )
@@ -26,7 +27,7 @@ func setupTestServer(t *testing.T, maxMessageSize int) (string, func()) {
 	hub := NewHub()
 	go hub.Run()
 
-	handler := UpgradeHandler(hub, maxMessageSize, nil)
+	handler := UpgradeHandler(hub, maxMessageSize, nil, nil, nil)
 	server := httptest.NewServer(handler)
 
 	url := "ws" + strings.TrimPrefix(server.URL, "http")
@@ -59,7 +60,8 @@ func setupTestServerWithAuth(t *testing.T, maxMessageSize int) (string, func(), 
 	hub := NewHub()
 	go hub.Run()
 
-	handler := UpgradeHandler(hub, maxMessageSize, authSvc)
+	mlsSvc := mls.NewService(s)
+	handler := UpgradeHandler(hub, maxMessageSize, authSvc, s, mlsSvc)
 	server := httptest.NewServer(handler)
 
 	url := "ws" + strings.TrimPrefix(server.URL, "http")
@@ -181,65 +183,30 @@ func readEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn) *prot
 	return &env
 }
 
-func TestEcho(t *testing.T) {
-	tests := []struct {
-		name    string
-		msgType protocol.MessageType
-		reqID   string
-		payload []byte
-	}{
-		{
-			name:    "echo MESSAGE_SEND",
-			msgType: protocol.MessageType_MESSAGE_SEND,
-			reqID:   "req-1",
-			payload: []byte("hello world"),
-		},
-		{
-			name:    "echo with empty payload",
-			msgType: protocol.MessageType_MESSAGE_SEND,
-			reqID:   "req-3",
-		},
-		{
-			name:    "echo with empty request ID",
-			msgType: protocol.MessageType_MESSAGE_SEND,
-			payload: []byte("no-request-id"),
-		},
+func TestUnknownMessageTypeReturnsError(t *testing.T) {
+	url, cleanup, s := setupTestServerWithAuth(t, 65536)
+	defer cleanup()
+	seedTestUser(t, s)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := dialTestServer(t, ctx, url)
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	authenticateConn(t, ctx, conn)
+
+	// Send an unknown message type
+	env := &protocol.Envelope{
+		Type:      protocol.MessageType_MESSAGE_TYPE_UNSPECIFIED,
+		RequestId: "unknown-type",
+		Payload:   []byte("test"),
 	}
+	sendEnvelope(t, ctx, conn, env)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			url, cleanup, s := setupTestServerWithAuth(t, 65536)
-			defer cleanup()
-			seedTestUser(t, s)
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			conn := dialTestServer(t, ctx, url)
-			defer conn.Close(websocket.StatusNormalClosure, "")
-
-			// Authenticate first
-			authenticateConn(t, ctx, conn)
-
-			env := &protocol.Envelope{
-				Type:      tt.msgType,
-				RequestId: tt.reqID,
-				Payload:   tt.payload,
-			}
-			sendEnvelope(t, ctx, conn, env)
-
-			resp := readEnvelope(t, ctx, conn)
-
-			if resp.Type != tt.msgType {
-				t.Errorf("Type = %v, want %v", resp.Type, tt.msgType)
-			}
-			if resp.RequestId != tt.reqID {
-				t.Errorf("RequestId = %q, want %q", resp.RequestId, tt.reqID)
-			}
-			if string(resp.Payload) != string(tt.payload) {
-				t.Errorf("Payload = %q, want %q", resp.Payload, tt.payload)
-			}
-		})
+	resp := readEnvelope(t, ctx, conn)
+	if resp.Type != protocol.MessageType_ERROR {
+		t.Fatalf("Type = %v, want ERROR", resp.Type)
 	}
 }
 
@@ -407,17 +374,18 @@ func TestMessageSizeLimit(t *testing.T) {
 	// Authenticate first
 	authenticateConn(t, ctx, conn)
 
-	// Verify a message within the limit works
+	// Verify a small valid message within the limit works (send a PING)
+	pingPayload, _ := proto.Marshal(&protocol.Ping{Timestamp: 1234})
 	smallEnv := &protocol.Envelope{
-		Type:      protocol.MessageType_MESSAGE_SEND,
+		Type:      protocol.MessageType_PING,
 		RequestId: "small",
-		Payload:   []byte("ok"),
+		Payload:   pingPayload,
 	}
 	sendEnvelope(t, ctx, conn, smallEnv)
 
 	resp := readEnvelope(t, ctx, conn)
 	if resp.RequestId != "small" {
-		t.Fatalf("Small message echo failed: RequestId = %q, want %q", resp.RequestId, "small")
+		t.Fatalf("Small message response failed: RequestId = %q, want %q", resp.RequestId, "small")
 	}
 
 	// Send a message exceeding the limit

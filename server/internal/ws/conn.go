@@ -13,7 +13,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/sovereign-im/sovereign/server/internal/auth"
+	"github.com/sovereign-im/sovereign/server/internal/mls"
 	"github.com/sovereign-im/sovereign/server/internal/protocol"
+	"github.com/sovereign-im/sovereign/server/internal/store"
 )
 
 // Connection states.
@@ -44,10 +46,14 @@ type Conn struct {
 	username    string
 	challengeID string
 	authTimer   *time.Timer
+
+	// Messaging dependencies.
+	store      *store.Store
+	mlsService *mls.Service
 }
 
 // NewConn creates a new Conn.
-func NewConn(id string, ws *websocket.Conn, hub *Hub, maxMessageSize int, authService *auth.Service) *Conn {
+func NewConn(id string, ws *websocket.Conn, hub *Hub, maxMessageSize int, authService *auth.Service, st *store.Store, mlsSvc *mls.Service) *Conn {
 	c := &Conn{
 		id:             id,
 		ws:             ws,
@@ -55,6 +61,8 @@ func NewConn(id string, ws *websocket.Conn, hub *Hub, maxMessageSize int, authSe
 		send:           make(chan []byte, 256),
 		maxMessageSize: int64(maxMessageSize),
 		authService:    authService,
+		store:          st,
+		mlsService:     mlsSvc,
 	}
 	c.state.Store(stateAuthenticating)
 	return c
@@ -161,7 +169,7 @@ func (c *Conn) handleEnvelope(ctx context.Context, env *protocol.Envelope) {
 	case stateAuthenticating:
 		c.handleAuthMessage(ctx, env)
 	case stateReady:
-		c.handleReadyMessage(env)
+		c.handleReadyMessage(ctx, env)
 	default:
 		log.Printf("[%s] Received message in disconnected state", c.id)
 	}
@@ -186,19 +194,504 @@ func (c *Conn) handleAuthMessage(ctx context.Context, env *protocol.Envelope) {
 }
 
 // handleReadyMessage processes messages after authentication is complete.
-func (c *Conn) handleReadyMessage(env *protocol.Envelope) {
+func (c *Conn) handleReadyMessage(ctx context.Context, env *protocol.Envelope) {
 	switch env.Type {
 	case protocol.MessageType_PING:
 		c.handlePing(env)
 	case protocol.MessageType_ERROR:
 		log.Printf("[%s] Received error message, discarding", c.id)
+
+	// Messaging
+	case protocol.MessageType_MESSAGE_SEND:
+		c.handleMessageSend(ctx, env)
+	case protocol.MessageType_MESSAGE_ACK:
+		c.handleMessageAck(ctx, env)
+
+	// Groups
+	case protocol.MessageType_GROUP_CREATE:
+		c.handleGroupCreate(ctx, env)
+	case protocol.MessageType_GROUP_INVITE:
+		c.handleGroupInvite(ctx, env)
+	case protocol.MessageType_GROUP_LEAVE:
+		c.handleGroupLeave(ctx, env)
+
+	// MLS
+	case protocol.MessageType_MLS_KEY_PACKAGE_UPLOAD:
+		c.handleMLSKeyPackageUpload(ctx, env)
+	case protocol.MessageType_MLS_KEY_PACKAGE_FETCH:
+		c.handleMLSKeyPackageFetch(ctx, env)
+	case protocol.MessageType_MLS_WELCOME:
+		c.handleMLSWelcome(ctx, env)
+	case protocol.MessageType_MLS_COMMIT:
+		c.handleMLSCommit(ctx, env)
+
 	default:
-		// Phase B: echo for now, real routing in Phase C.
-		c.echoEnvelope(env)
+		c.sendError(env, 3001, "Unknown message type", false)
 	}
 }
 
-// --- Auth Message Handlers ---
+// ============================================================================
+// Messaging Handlers
+// ============================================================================
+
+func (c *Conn) handleMessageSend(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.MessageSend
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid message.send payload", false)
+		return
+	}
+
+	// Validate membership.
+	isMember, err := c.store.IsUserMember(ctx, msg.ConversationId, c.userID)
+	if err != nil {
+		log.Printf("[%s] membership check error: %v", c.id, err)
+		c.sendError(env, 9001, "Internal error", false)
+		return
+	}
+	if !isMember {
+		c.sendError(env, 4001, "Not a member of this conversation", false)
+		return
+	}
+
+	// Map message_type string to int for storage.
+	msgTypeInt := store.MsgTypeApplication
+
+	// Store message.
+	messageID, serverTS, err := c.store.InsertMessage(ctx, msg.ConversationId, c.userID, msg.EncryptedPayload, msgTypeInt, 0)
+	if err != nil {
+		log.Printf("[%s] insert message error: %v", c.id, err)
+		c.sendError(env, 9001, "Failed to store message", false)
+		return
+	}
+
+	// Build MESSAGE_RECEIVE envelope.
+	receiveMsg := &protocol.MessageReceive{
+		MessageId:        messageID,
+		ConversationId:   msg.ConversationId,
+		SenderId:         c.userID,
+		EncryptedPayload: msg.EncryptedPayload,
+		ServerTimestamp:  serverTS,
+		MessageType:      msg.MessageType,
+	}
+	receivePayload, err := proto.Marshal(receiveMsg)
+	if err != nil {
+		log.Printf("[%s] marshal message receive error: %v", c.id, err)
+		return
+	}
+	receiveEnv := &protocol.Envelope{
+		Type:    protocol.MessageType_MESSAGE_RECEIVE,
+		Payload: receivePayload,
+	}
+
+	// Echo back to sender as delivery confirmation (with the request_id).
+	senderEnv := &protocol.Envelope{
+		Type:      protocol.MessageType_MESSAGE_RECEIVE,
+		RequestId: env.RequestId,
+		Payload:   receivePayload,
+	}
+	c.sendEnvelope(senderEnv)
+
+	// Forward to online group members.
+	members, err := c.store.GetMembers(ctx, msg.ConversationId)
+	if err != nil {
+		log.Printf("[%s] get members error: %v", c.id, err)
+		return
+	}
+	for _, m := range members {
+		if m.UserID == c.userID {
+			continue
+		}
+		if c.hub.SendToUser(m.UserID, receiveEnv) {
+			// Mark delivered for online recipients.
+			if err := c.store.UpdateDeliveryStatus(ctx, messageID, m.UserID, store.DeliveryDelivered); err != nil {
+				log.Printf("[%s] update delivery status error: %v", c.id, err)
+			}
+		}
+	}
+}
+
+func (c *Conn) handleMessageAck(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.MessageAck
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid message.ack payload", false)
+		return
+	}
+
+	// Update delivery status to DELIVERED.
+	if err := c.store.UpdateDeliveryStatus(ctx, msg.MessageId, c.userID, store.DeliveryDelivered); err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			log.Printf("[%s] update delivery status error: %v", c.id, err)
+		}
+		return
+	}
+
+	// Notify sender that message was delivered.
+	senderID, err := c.store.GetMessageSenderID(ctx, msg.MessageId)
+	if err != nil {
+		log.Printf("[%s] get message sender error: %v", c.id, err)
+		return
+	}
+
+	deliveredMsg := &protocol.MessageDelivered{
+		MessageId:   msg.MessageId,
+		DeliveredTo: c.userID,
+	}
+	deliveredPayload, err := proto.Marshal(deliveredMsg)
+	if err != nil {
+		log.Printf("[%s] marshal delivered error: %v", c.id, err)
+		return
+	}
+	deliveredEnv := &protocol.Envelope{
+		Type:    protocol.MessageType_MESSAGE_DELIVERED,
+		Payload: deliveredPayload,
+	}
+	c.hub.SendToUser(senderID, deliveredEnv)
+}
+
+// ============================================================================
+// Group Handlers
+// ============================================================================
+
+func (c *Conn) handleGroupCreate(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.GroupCreate
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid group.create payload", false)
+		return
+	}
+
+	conv, err := c.store.CreateConversation(ctx, msg.Title, c.userID, msg.MemberIds)
+	if err != nil {
+		log.Printf("[%s] create conversation error: %v", c.id, err)
+		c.sendError(env, 9001, "Failed to create group", false)
+		return
+	}
+
+	// Build member list for response.
+	members, err := c.store.GetMembers(ctx, conv.ID)
+	if err != nil {
+		log.Printf("[%s] get members error: %v", c.id, err)
+		c.sendError(env, 9001, "Failed to get group members", false)
+		return
+	}
+
+	var pbMembers []*protocol.GroupMember
+	for _, m := range members {
+		user, err := c.store.GetUserByID(ctx, m.UserID)
+		if err != nil {
+			log.Printf("[%s] get user %s error: %v", c.id, m.UserID, err)
+			continue
+		}
+		pbMembers = append(pbMembers, &protocol.GroupMember{
+			UserId:      user.ID,
+			Username:    user.Username,
+			DisplayName: user.DisplayName,
+			Role:        m.Role,
+		})
+	}
+
+	// Send GROUP_CREATED to creator.
+	created := &protocol.GroupCreated{
+		ConversationId: conv.ID,
+		Title:          msg.Title,
+		Members:        pbMembers,
+	}
+	c.sendTypedResponse(env, protocol.MessageType_GROUP_CREATED, created)
+
+	// Notify all members with GROUP_MEMBER_ADDED.
+	for _, m := range members {
+		added := &protocol.GroupMemberAdded{
+			ConversationId: conv.ID,
+			UserId:         m.UserID,
+			AddedBy:        c.userID,
+		}
+		addedPayload, err := proto.Marshal(added)
+		if err != nil {
+			continue
+		}
+		addedEnv := &protocol.Envelope{
+			Type:    protocol.MessageType_GROUP_MEMBER_ADDED,
+			Payload: addedPayload,
+		}
+		if m.UserID != c.userID {
+			c.hub.SendToUser(m.UserID, addedEnv)
+		}
+	}
+}
+
+func (c *Conn) handleGroupInvite(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.GroupInvite
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid group.invite payload", false)
+		return
+	}
+
+	// Validate admin role.
+	role, err := c.store.GetMemberRole(ctx, msg.ConversationId, c.userID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			c.sendError(env, 4001, "Not a member of this conversation", false)
+		} else {
+			c.sendError(env, 9001, "Internal error", false)
+		}
+		return
+	}
+	if role != "admin" {
+		c.sendError(env, 4003, "Only admins can invite members", false)
+		return
+	}
+
+	// Add the member.
+	if err := c.store.AddMember(ctx, msg.ConversationId, msg.UserId, "member"); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			c.sendError(env, 4002, "User is already a member", false)
+		} else {
+			log.Printf("[%s] add member error: %v", c.id, err)
+			c.sendError(env, 9001, "Failed to add member", false)
+		}
+		return
+	}
+
+	// Notify all group members (including new member).
+	added := &protocol.GroupMemberAdded{
+		ConversationId: msg.ConversationId,
+		UserId:         msg.UserId,
+		AddedBy:        c.userID,
+	}
+	addedPayload, err := proto.Marshal(added)
+	if err != nil {
+		return
+	}
+	addedEnv := &protocol.Envelope{
+		Type:    protocol.MessageType_GROUP_MEMBER_ADDED,
+		Payload: addedPayload,
+	}
+
+	members, err := c.store.GetMembers(ctx, msg.ConversationId)
+	if err != nil {
+		log.Printf("[%s] get members error: %v", c.id, err)
+		return
+	}
+	memberIDs := make([]string, len(members))
+	for i, m := range members {
+		memberIDs[i] = m.UserID
+	}
+	c.hub.BroadcastToGroup(memberIDs, addedEnv, "")
+}
+
+func (c *Conn) handleGroupLeave(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.GroupLeave
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid group.leave payload", false)
+		return
+	}
+
+	// Check if user is admin; if so, transfer admin to next oldest member.
+	role, err := c.store.GetMemberRole(ctx, msg.ConversationId, c.userID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			c.sendError(env, 4001, "Not a member of this conversation", false)
+		} else {
+			c.sendError(env, 9001, "Internal error", false)
+		}
+		return
+	}
+
+	if role == "admin" {
+		if err := c.store.TransferAdmin(ctx, msg.ConversationId, c.userID); err != nil {
+			log.Printf("[%s] transfer admin error: %v", c.id, err)
+		}
+	}
+
+	// Remove the member.
+	if err := c.store.RemoveMember(ctx, msg.ConversationId, c.userID); err != nil {
+		log.Printf("[%s] remove member error: %v", c.id, err)
+		c.sendError(env, 9001, "Failed to leave group", false)
+		return
+	}
+
+	// Notify remaining members.
+	removed := &protocol.GroupMemberRemoved{
+		ConversationId: msg.ConversationId,
+		UserId:         c.userID,
+		RemovedBy:      c.userID,
+	}
+	removedPayload, err := proto.Marshal(removed)
+	if err != nil {
+		return
+	}
+	removedEnv := &protocol.Envelope{
+		Type:    protocol.MessageType_GROUP_MEMBER_REMOVED,
+		Payload: removedPayload,
+	}
+
+	members, err := c.store.GetMembers(ctx, msg.ConversationId)
+	if err != nil {
+		log.Printf("[%s] get members error: %v", c.id, err)
+		return
+	}
+	memberIDs := make([]string, len(members))
+	for i, m := range members {
+		memberIDs[i] = m.UserID
+	}
+	c.hub.BroadcastToGroup(memberIDs, removedEnv, "")
+}
+
+// ============================================================================
+// MLS Handlers
+// ============================================================================
+
+func (c *Conn) handleMLSKeyPackageUpload(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.MLSKeyPackageUpload
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid mls.key_package.upload payload", false)
+		return
+	}
+
+	if err := c.mlsService.UploadKeyPackage(ctx, c.userID, msg.KeyPackageData); err != nil {
+		if errors.Is(err, mls.ErrInvalidPayload) {
+			c.sendError(env, 5001, "Invalid key package data", false)
+		} else {
+			log.Printf("[%s] upload key package error: %v", c.id, err)
+			c.sendError(env, 9001, "Failed to store key package", false)
+		}
+		return
+	}
+	// No explicit response per spec; success is silent.
+}
+
+func (c *Conn) handleMLSKeyPackageFetch(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.MLSKeyPackageFetch
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid mls.key_package.fetch payload", false)
+		return
+	}
+
+	data, err := c.mlsService.FetchKeyPackage(ctx, msg.UserId)
+	if err != nil {
+		if errors.Is(err, mls.ErrNoKeyPackage) {
+			c.sendError(env, 5005, "No key package available for user", false)
+		} else {
+			log.Printf("[%s] fetch key package error: %v", c.id, err)
+			c.sendError(env, 9001, "Failed to fetch key package", false)
+		}
+		return
+	}
+
+	resp := &protocol.MLSKeyPackageResponse{
+		UserId:         msg.UserId,
+		KeyPackageData: data,
+	}
+	c.sendTypedResponse(env, protocol.MessageType_MLS_KEY_PACKAGE_RESPONSE, resp)
+}
+
+func (c *Conn) handleMLSWelcome(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.MLSWelcome
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid mls.welcome payload", false)
+		return
+	}
+
+	// Forward the Welcome to the recipient.
+	welcomeReceive := &protocol.MLSWelcomeReceive{
+		ConversationId: msg.ConversationId,
+		SenderId:       c.userID,
+		WelcomeData:    msg.WelcomeData,
+	}
+	receivePayload, err := proto.Marshal(welcomeReceive)
+	if err != nil {
+		log.Printf("[%s] marshal welcome receive error: %v", c.id, err)
+		return
+	}
+	welcomeEnv := &protocol.Envelope{
+		Type:    protocol.MessageType_MLS_WELCOME_RECEIVE,
+		Payload: receivePayload,
+	}
+	c.hub.SendToUser(msg.RecipientId, welcomeEnv)
+}
+
+func (c *Conn) handleMLSCommit(ctx context.Context, env *protocol.Envelope) {
+	var msg protocol.MLSCommit
+	if err := proto.Unmarshal(env.Payload, &msg); err != nil {
+		c.sendError(env, 3001, "Invalid mls.commit payload", false)
+		return
+	}
+
+	// Validate membership.
+	isMember, err := c.store.IsUserMember(ctx, msg.ConversationId, c.userID)
+	if err != nil {
+		log.Printf("[%s] membership check error: %v", c.id, err)
+		c.sendError(env, 9001, "Internal error", false)
+		return
+	}
+	if !isMember {
+		c.sendError(env, 4001, "Not a member of this conversation", false)
+		return
+	}
+
+	// Broadcast to all group members except sender.
+	commitBroadcast := &protocol.MLSCommitBroadcast{
+		ConversationId: msg.ConversationId,
+		SenderId:       c.userID,
+		CommitData:     msg.CommitData,
+	}
+	broadcastPayload, err := proto.Marshal(commitBroadcast)
+	if err != nil {
+		log.Printf("[%s] marshal commit broadcast error: %v", c.id, err)
+		return
+	}
+	broadcastEnv := &protocol.Envelope{
+		Type:    protocol.MessageType_MLS_COMMIT_BROADCAST,
+		Payload: broadcastPayload,
+	}
+
+	members, err := c.store.GetMembers(ctx, msg.ConversationId)
+	if err != nil {
+		log.Printf("[%s] get members error: %v", c.id, err)
+		return
+	}
+	memberIDs := make([]string, len(members))
+	for i, m := range members {
+		memberIDs[i] = m.UserID
+	}
+	c.hub.BroadcastToGroup(memberIDs, broadcastEnv, c.userID)
+}
+
+// ============================================================================
+// Offline Delivery
+// ============================================================================
+
+// deliverPendingMessages sends all pending messages to the user on connect.
+func (c *Conn) deliverPendingMessages(ctx context.Context) {
+	msgs, err := c.store.GetPendingMessages(ctx, c.userID)
+	if err != nil {
+		log.Printf("[%s] get pending messages error: %v", c.id, err)
+		return
+	}
+
+	for _, m := range msgs {
+		receiveMsg := &protocol.MessageReceive{
+			MessageId:        m.ID,
+			ConversationId:   m.GroupID,
+			SenderId:         m.SenderID,
+			EncryptedPayload: m.Payload,
+			ServerTimestamp:  m.ServerTimestamp,
+		}
+		c.sendTypedResponse(nil, protocol.MessageType_MESSAGE_RECEIVE, receiveMsg)
+
+		// Mark as delivered.
+		if err := c.store.UpdateDeliveryStatus(ctx, m.ID, c.userID, store.DeliveryDelivered); err != nil {
+			log.Printf("[%s] update delivery status for %s error: %v", c.id, m.ID, err)
+		}
+	}
+
+	if len(msgs) > 0 {
+		log.Printf("[%s] Delivered %d pending messages to user %s", c.id, len(msgs), c.userID)
+	}
+}
+
+// ============================================================================
+// Auth Message Handlers
+// ============================================================================
 
 func (c *Conn) handleAuthRequest(ctx context.Context, env *protocol.Envelope) {
 	var req protocol.AuthRequest
@@ -213,7 +706,7 @@ func (c *Conn) handleAuthRequest(ctx context.Context, env *protocol.Envelope) {
 	info, err := c.authService.ValidateSession(ctx, req.Username)
 	if err == nil {
 		// Valid session token — skip WebAuthn ceremony.
-		if !c.transitionToReady(info.UserID, info.Username) {
+		if !c.transitionToReady(ctx, info.UserID, info.Username) {
 			return // auth timer already fired
 		}
 		c.sendAuthSuccess(env, "", info.UserID, info.Username, info.DisplayName)
@@ -265,7 +758,7 @@ func (c *Conn) handleAuthResponse(ctx context.Context, env *protocol.Envelope) {
 		return
 	}
 
-	if !c.transitionToReady(result.UserID, result.Username) {
+	if !c.transitionToReady(ctx, result.UserID, result.Username) {
 		return
 	}
 	c.sendAuthSuccess(env, result.Token, result.UserID, result.Username, result.DisplayName)
@@ -323,7 +816,7 @@ func (c *Conn) handleAuthRegisterResponse(ctx context.Context, env *protocol.Env
 		return
 	}
 
-	if !c.transitionToReady(result.UserID, result.Username) {
+	if !c.transitionToReady(ctx, result.UserID, result.Username) {
 		return
 	}
 
@@ -336,11 +829,13 @@ func (c *Conn) handleAuthRegisterResponse(ctx context.Context, env *protocol.Env
 	log.Printf("[%s] Registration successful for user %s", c.id, result.Username)
 }
 
-// --- Auth Helpers ---
+// ============================================================================
+// Auth Helpers
+// ============================================================================
 
 // transitionToReady atomically transitions from authenticating to ready.
 // Returns false if the transition failed (e.g., auth timer already fired).
-func (c *Conn) transitionToReady(userID, username string) bool {
+func (c *Conn) transitionToReady(ctx context.Context, userID, username string) bool {
 	if !c.state.CompareAndSwap(stateAuthenticating, stateReady) {
 		return false
 	}
@@ -348,6 +843,10 @@ func (c *Conn) transitionToReady(userID, username string) bool {
 	c.userID = userID
 	c.username = username
 	c.hub.SetAuthenticated(c, userID)
+
+	// Deliver pending messages after successful authentication.
+	go c.deliverPendingMessages(ctx)
+
 	return true
 }
 
@@ -420,7 +919,9 @@ func (c *Conn) sendTypedResponse(origEnv *protocol.Envelope, msgType protocol.Me
 	c.sendEnvelope(env)
 }
 
-// --- Existing Message Handlers ---
+// ============================================================================
+// System Message Handlers
+// ============================================================================
 
 // handlePing responds to a PING with a PONG echoing the timestamp.
 func (c *Conn) handlePing(env *protocol.Envelope) {
@@ -436,11 +937,6 @@ func (c *Conn) handlePing(env *protocol.Envelope) {
 	}
 
 	c.sendTypedResponse(env, protocol.MessageType_PONG, pong)
-}
-
-// echoEnvelope sends the envelope back to the sender.
-func (c *Conn) echoEnvelope(env *protocol.Envelope) {
-	c.sendEnvelope(env)
 }
 
 // sendEnvelope serializes and queues an envelope for sending.
